@@ -1,4 +1,4 @@
-# main.py - упрощенная версия для КиноПоиска
+# main.py - ИСПРАВЛЕННЫЙ
 
 import os
 import sys
@@ -54,6 +54,26 @@ def main():
     try:
         from bot import handlers, database
         logger.info("✅ Модули импортированы")
+
+        # Проверяем наличие всех необходимых функций
+        required_functions = [
+            'start',
+            'help_command',
+            'search_command',
+            'show_top250',
+            'random_real_movie',  # ⚠️ ВАЖНО: именно random_real_movie
+            'show_watchlist',
+            'handle_message',
+            'button_handler'
+        ]
+
+        for func in required_functions:
+            if hasattr(handlers, func):
+                logger.info(f"✅ Функция {func} найдена")
+            else:
+                logger.error(f"❌ Функция {func} НЕ найдена в handlers!")
+                sys.exit(1)
+
     except ImportError as e:
         logger.error(f"❌ Ошибка импорта модулей: {e}")
         sys.exit(1)
@@ -72,26 +92,54 @@ def main():
         application = Application.builder().token(token).build()
         logger.info("✅ Приложение Telegram создано")
 
-        # Регистрируем обработчики
+        # Регистрируем команды - ИСПРАВЛЕНО!
         application.add_handler(CommandHandler("start", handlers.start))
         application.add_handler(CommandHandler("help", handlers.help_command))
         application.add_handler(CommandHandler("search", handlers.search_command))
         application.add_handler(CommandHandler("top", handlers.show_top250))
-        application.add_handler(CommandHandler("random", handlers.random_movie))
+        application.add_handler(CommandHandler("random", handlers.random_real_movie))  # ✅ ИСПРАВЛЕНО
         application.add_handler(CommandHandler("watchlist", handlers.show_watchlist))
+
+        logger.info("✅ Все команды зарегистрированы")
 
         # Inline кнопки
         application.add_handler(CallbackQueryHandler(handlers.button_handler))
+        logger.info("✅ Обработчик кнопок зарегистрирован")
 
         # Текстовые сообщения
         application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_message))
+        logger.info("✅ Обработчик текстовых сообщений зарегистрирован")
 
-        logger.info("✅ Все обработчики зарегистрированы")
+        # Обработчик ошибок
+        async def error_handler(update, context):
+            logger.error(f"Ошибка в боте: {context.error}", exc_info=True)
+
+        application.add_error_handler(error_handler)
+
+        # Настраиваем меню команд
+        async def post_init(application):
+            from telegram import BotCommand
+            await application.bot.set_my_commands([
+                BotCommand("start", "Запустить бота"),
+                BotCommand("help", "Помощь по командам"),
+                BotCommand("search", "Поиск фильмов"),
+                BotCommand("top", "Топ-250 фильмов"),
+                BotCommand("random", "Случайный фильм"),
+                BotCommand("watchlist", "Мой список"),
+            ])
+            logger.info("✅ Меню команд настроено")
+
+        application.post_init = post_init
 
         # Запускаем бота
         logger.info("🔄 Запуск бота в режиме polling...")
-        application.run_polling(drop_pending_updates=True)
+        application.run_polling(
+            drop_pending_updates=True,
+            allowed_updates=['message', 'callback_query']
+        )
 
+    except KeyboardInterrupt:
+        logger.info("⏹️ Бот остановлен пользователем")
     except Exception as e:
         logger.error(f"💥 Критическая ошибка: {e}", exc_info=True)
         sys.exit(1)
@@ -105,4 +153,10 @@ if __name__ == '__main__':
     except ImportError:
         logger.info("ℹ️ dotenv не установлен (нормально для Railway)")
 
+    # Проверяем версию Python
+    if sys.version_info < (3, 8):
+        logger.error("❌ Требуется Python 3.8 или выше")
+        sys.exit(1)
+
+    # Запускаем бота
     main()

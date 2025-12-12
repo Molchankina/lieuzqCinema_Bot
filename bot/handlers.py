@@ -1,6 +1,7 @@
-# bot/handlers.py - ИСПРАВЛЕННАЯ ВЕРСИЯ
+# bot/handlers.py - ПОЛНЫЙ ИСПРАВЛЕННЫЙ КОД
 
 import logging
+import random
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
 from telegram.ext import ContextTypes
 
@@ -24,6 +25,109 @@ except ImportError as e:
     logger.warning(f"⚠️ Модуль db_utils не найден: {e}")
     db_manager = None
 
+# Карта жанров для поиска
+GENRE_MAP = {
+    "драма": 1,
+    "комедия": 13,
+    "боевик": 11,
+    "триллер": 4,
+    "фантастика": 6,
+    "ужасы": 7,
+    "детектив": 3,
+    "мелодрама": 22,
+    "приключения": 12,
+    "фэнтези": 14,
+    "мультфильм": 16,
+    "биография": 5,
+    "вестерн": 10,
+    "история": 18,
+    "криминал": 8
+}
+
+# Список популярных фильмов для случайного выбора
+POPULAR_MOVIES = [
+    {
+        "title": "Начало",
+        "year": "2010",
+        "rating": "8.8",
+        "genre": "фантастика, триллер",
+        "desc": "Воры внедряются в сны, чтобы украсть идеи.",
+        "country": "США, Великобритания"
+    },
+    {
+        "title": "Зеленая миля",
+        "year": "1999",
+        "rating": "9.1",
+        "genre": "драма, фэнтези",
+        "desc": "История надзирателя в тюрьме для смертников.",
+        "country": "США"
+    },
+    {
+        "title": "Форрест Гамп",
+        "year": "1994",
+        "rating": "8.8",
+        "genre": "драма, мелодрама",
+        "desc": "Жизнь человека с низким IQ, который стал свидетелем ключевых событий истории.",
+        "country": "США"
+    },
+    {
+        "title": "Поймай меня, если сможешь",
+        "year": "2002",
+        "rating": "8.1",
+        "genre": "криминал, драма",
+        "desc": "Подросток-аферист выдает себя за пилота, врача и юриста.",
+        "country": "США, Канада"
+    },
+    {
+        "title": "Побег из Шоушенка",
+        "year": "1994",
+        "rating": "9.1",
+        "genre": "драма",
+        "desc": "Бухгалтер Энди Дюфрейн оказывается в тюрьме на пожизненный срок.",
+        "country": "США"
+    },
+    {
+        "title": "Криминальное чтиво",
+        "year": "1994",
+        "rating": "8.9",
+        "genre": "криминал, драма",
+        "desc": "Несколько переплетающихся историй о жизни мелких преступников.",
+        "country": "США"
+    },
+    {
+        "title": "Властелин колец: Братство кольца",
+        "year": "2001",
+        "rating": "8.8",
+        "genre": "фэнтези, приключения",
+        "desc": "Средиземье. Хоббит Фродо должен уничтожить Кольцо Всевластья.",
+        "country": "Новая Зеландия, США"
+    },
+    {
+        "title": "Леон",
+        "year": "1994",
+        "rating": "8.8",
+        "genre": "боевик, триллер",
+        "desc": "Профессиональный убийца Леон знакомится со своей соседкой Матильдой.",
+        "country": "Франция, США"
+    },
+    {
+        "title": "Король Лев",
+        "year": "1994",
+        "rating": "8.8",
+        "genre": "мультфильм, драма",
+        "desc": "Львенок Симба познает круговорот жизни в африканской саванне.",
+        "country": "США"
+    },
+    {
+        "title": "Титаник",
+        "year": "1997",
+        "rating": "8.4",
+        "genre": "драма, мелодрама",
+        "desc": "Молодые влюбленные Джек и Роза на борту «Титаника».",
+        "country": "США, Мексика"
+    }
+]
+
 def get_main_keyboard():
     """Основная клавиатура"""
     keyboard = [
@@ -42,6 +146,8 @@ def get_genre_keyboard():
         ["🔙 На главную"]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+# ==================== ОСНОВНЫЕ ОБРАБОТЧИКИ КОМАНД ====================
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /start"""
@@ -66,122 +172,56 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=get_main_keyboard()
     )
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработка текстовых сообщений - ИСПРАВЛЕННАЯ"""
-    text = update.message.text
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /help"""
+    help_text = """
+📚 *MovieMate Bot — помощник по фильмам*
 
-    # Сохраняем оригинальный текст для логирования
-    original_text = text
+🎯 *Основные функции:*
+• Поиск фильмов и сериалов
+• Топ-250 лучших фильмов
+• Подбор по жанрам
+• Случайные рекомендации
+• Список «Посмотреть позже»
 
-    # Приводим к нижнему регистру для сравнения
-    text_lower = text.lower()
+⌨️ *Используй кнопки или команды:*
+• /start — запустить бота
+• /search <название> — поиск фильма
+• /top — топ-250 фильмов  
+• /random — случайный фильм
+• /watchlist — мой список
+• /help — эта справка
 
-    logger.info(f"Получено сообщение: '{original_text}' (нижний регистр: '{text_lower}')")
+🎬 *Примеры запросов:*
+• «Матрица»
+• «Детектив 90-х»
+• «Лучшие комедии 2000-х»
+"""
+    await update.message.reply_text(help_text, parse_mode='Markdown', reply_markup=get_main_keyboard())
 
-    # Обработка кнопок
-    if text_lower == "🔍 поиск фильма" or text == "🔍 Поиск фильма":
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /search"""
+    query = ' '.join(context.args) if context.args else ''
+
+    if not query:
         await update.message.reply_text(
             "Введите название фильма или сериала:\n"
             "Например: *Матрица* или *Игра престолов*",
             parse_mode='Markdown'
         )
-        context.user_data['waiting_for'] = 'search'
         return
 
-    elif text_lower == "🎭 по жанру" or text == "🎭 По жанру":
-        await update.message.reply_text(
-            "Выберите жанр:",
-            reply_markup=get_genre_keyboard()
-        )
-        return
+    await execute_search(update, query)
 
-    elif text_lower == "⭐ топ 250" or text == "⭐ Топ 250":
-        await show_top250(update, context)
-        return
-
-    elif text_lower == "🎲 случайный" or text == "🎲 Случайный":
-        await random_real_movie(update, context)
-        return
-
-    elif text_lower == "📋 мой watchlist" or text == "📋 Мой Watchlist":
-        await show_watchlist(update, context)
-        return
-
-    elif text_lower == "ℹ️ помощь" or text == "ℹ️ Помощь":
-        await help_command(update, context)
-        return
-
-    elif text_lower == "🔙 на главную" or text == "🔙 На главную":
-        await update.message.reply_text(
-            "Возвращаю на главную...",
-            reply_markup=get_main_keyboard()
-        )
-        return
-
-    # Обработка жанров (точное совпадение с учетом регистра)
-    genre_buttons = {
-        "🎭 Драма": "драма",
-        "😂 Комедия": "комедия",
-        "🔫 Боевик": "боевик",
-        "👻 Ужасы": "ужасы",
-        "🚀 Фантастика": "фантастика",
-        "🔍 Детектив": "детектив",
-        "❤️ Мелодрама": "мелодрама",
-        "🧩 Триллер": "триллер",
-        "🎬 Приключения": "приключения"
-    }
-
-    if text in genre_buttons:
-        genre = genre_buttons[text]
-        await search_by_genre(update, context, genre)
-        return
-
-    # Обработка ввода после нажатия кнопки
-    if 'waiting_for' in context.user_data:
-        if context.user_data['waiting_for'] == 'search':
-            await search_command(update, context, text)
-            context.user_data.pop('waiting_for', None)
-            return
-
-    # Если сообщение содержит только цифры (например, "250"), игнорируем
-    if text.strip().isdigit() and len(text.strip()) <= 3:
-        logger.info(f"Игнорируем числовой запрос: '{text}'")
-        await update.message.reply_text(
-            "Используйте кнопки ниже для навигации 👇",
-            reply_markup=get_main_keyboard()
-        )
-        return
-
-    # Прямые текстовые запросы (исключая команды)
-    if text and len(text.strip()) > 2 and not text.strip().startswith('/'):
-        await search_command(update, context, text)
-        return
-
-    # Если ничего не подошло
-    await update.message.reply_text(
-        "Введите название фильма для поиска или используйте кнопки ниже 👇",
-        reply_markup=get_main_keyboard()
-    )
-
-async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str = None):
-    """Поиск фильмов через КиноПоиск - ИСПРАВЛЕННЫЙ"""
-    if not query or len(query.strip()) < 2:
-        await update.message.reply_text("Введите название фильма (минимум 2 символа)")
-        return
-
-    clean_query = query.strip()
-
-    # Если это команда (начинается с /), игнорируем
-    if clean_query.startswith('/'):
-        return
-
+async def execute_search(update: Update, query: str):
+    """Выполнение поиска фильмов"""
     if not api_client or not api_client.is_active:
-        await show_test_results(update, clean_query)
+        await show_test_results(update, query)
         return
 
     try:
-        logger.info(f"🔍 Поиск в КиноПоиске: '{clean_query}'")
-        result = api_client.search_films(clean_query)
+        logger.info(f"🔍 Поиск в КиноПоиске: '{query}'")
+        result = api_client.search_films(query)
 
         if not result or 'error' in result:
             error_msg = result.get('error', 'Неизвестная ошибка')
@@ -195,7 +235,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE, que
 
         if not films or total_found == 0:
             await update.message.reply_text(
-                f"😔 По запросу «{clean_query}» ничего не найдено.\n\n"
+                f"😔 По запросу «{query}» ничего не найдено.\n\n"
                 "Попробуйте:\n"
                 "• Уточнить название\n"
                 "• Использовать русское название\n"
@@ -228,7 +268,7 @@ async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE, que
         )
 
 async def send_film_card(update, film) -> bool:
-    """Отправляет карточку фильма с кнопками - ИСПРАВЛЕННАЯ"""
+    """Отправляет карточку фильма с кнопками"""
     try:
         title = film.get('nameRu') or film.get('nameEn') or 'Без названия'
         year = film.get('year', '')
@@ -316,115 +356,36 @@ async def show_test_results(update, query):
     for film in test_films:
         await send_film_card(update, film)
 
-async def search_by_genre(update: Update, context: ContextTypes.DEFAULT_TYPE, genre: str = None):
-    """Поиск фильмов по жанру - ИСПРАВЛЕННЫЙ"""
-    if not genre:
-        await update.message.reply_text("Укажите жанр")
-        return
-
-    # Карта жанров
-    genre_map = {
-        "драма": 1, "комедия": 13, "боевик": 11, "ужасы": 7,
-        "фантастика": 6, "детектив": 3, "мелодрама": 22,
-        "триллер": 4, "приключения": 12
-    }
-
-    genre_id = genre_map.get(genre.lower())
-    if not genre_id:
-        await update.message.reply_text(f"Жанр «{genre}» не найден.")
-        return
-
-    await update.message.reply_text(f"🎭 Ищу фильмы в жанре *{genre}*...", parse_mode='Markdown')
-
+async def show_top250(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /top - показывает топ-250 фильмов"""
     if not api_client or not api_client.is_active:
-        await update.message.reply_text(
-            f"🎭 *Фильмы в жанре {genre}:*\n\n"
-            "1. Пример фильма 1 (2000) ⭐ 8.5\n"
-            "2. Пример фильма 2 (2010) ⭐ 8.0\n"
-            "3. Пример фильма 3 (2020) ⭐ 7.8\n\n"
-            "⚠️ API не активен, показаны примеры",
-            parse_mode='Markdown',
-            reply_markup=get_main_keyboard()
-        )
-        return
-
-    try:
-        result = api_client.get_films_by_filters(genre_id=genre_id, rating_from=7)
-        films = result.get('items', [])[:5]
-
-        if not films:
-            await update.message.reply_text(
-                f"По жанру «{genre}» ничего не найдено.\n"
-                "Попробуйте другой жанр.",
-                reply_markup=get_genre_keyboard()
-            )
-            return
-
-        text = f"🎭 *Лучшие фильмы в жанре {genre}:*\n\n"
-        for i, film in enumerate(films, 1):
-            title = film.get('nameRu') or 'Без названия'
-            year = film.get('year', '')
-            rating = film.get('ratingKinopoisk', '')
-
-            text += f"{i}. *{title}*"
-            if year:
-                text += f" ({year})"
-            if rating:
-                text += f" ⭐ {rating}"
-            text += "\n"
+        # Тестовые данные
+        text = "⭐ *Топ-10 лучших фильмов (пример):*\n\n"
+        text += "1. *Побег из Шоушенка* (1994) ⭐ 9.1\n"
+        text += "2. *Крестный отец* (1972) ⭐ 9.0\n"
+        text += "3. *Темный рыцарь* (2008) ⭐ 9.0\n"
+        text += "4. *Крестный отец 2* (1974) ⭐ 9.0\n"
+        text += "5. *12 разгневанных мужчин* (1957) ⭐ 9.0\n"
+        text += "6. *Список Шиндлера* (1993) ⭐ 8.9\n"
+        text += "7. *Властелин колец: Возвращение короля* (2003) ⭐ 8.9\n"
+        text += "8. *Криминальное чтиво* (1994) ⭐ 8.9\n"
+        text += "9. *Властелин колец: Братство кольца* (2001) ⭐ 8.8\n"
+        text += "10. *Форрест Гамп* (1994) ⭐ 8.8"
 
         await update.message.reply_text(
             text,
             parse_mode='Markdown',
             reply_markup=get_main_keyboard()
         )
-
-    except Exception as e:
-        logger.error(f"Ошибка поиска по жанру: {e}")
-        await update.message.reply_text(
-            f"🎭 *Фильмы в жанре {genre}:*\n\n"
-            "1. Пример драмы 1 (2000) ⭐ 8.5\n"
-            "2. Пример драмы 2 (2010) ⭐ 8.0\n"
-            "3. Пример драмы 3 (2020) ⭐ 7.8",
-            parse_mode='Markdown',
-            reply_markup=get_main_keyboard()
-        )
-
-async def show_top250(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать топ-250 фильмов - ИСПРАВЛЕННЫЙ"""
-    # УДАЛЯЕМ начальное сообщение "Загружаю топ-250", чтобы не было дубля
-    # await update.message.reply_text("⭐ Загружаю топ-250 фильмов...")
+        return
 
     try:
-        if not api_client or not api_client.is_active:
-            await update.message.reply_text(
-                "⭐ *Топ-10 лучших фильмов (пример):*\n\n"
-                "1. Побег из Шоушенка (1994) ⭐ 9.1\n"
-                "2. Крестный отец (1972) ⭐ 9.0\n"
-                "3. Темный рыцарь (2008) ⭐ 9.0\n"
-                "4. Крестный отец 2 (1974) ⭐ 9.0\n"
-                "5. 12 разгневанных мужчин (1957) ⭐ 9.0\n"
-                "6. Список Шиндлера (1993) ⭐ 8.9\n"
-                "7. Властелин колец: Возвращение короля (2003) ⭐ 8.9\n"
-                "8. Криминальное чтиво (1994) ⭐ 8.9\n"
-                "9. Властелин колец: Братство кольца (2001) ⭐ 8.8\n"
-                "10. Форрест Гамп (1994) ⭐ 8.8",
-                parse_mode='Markdown',
-                reply_markup=get_main_keyboard()
-            )
-            return
-
         result = api_client.get_top_films(page=1)
         films = result.get('films', [])[:10]
 
         if not films:
             await update.message.reply_text(
-                "⭐ *Топ-10 лучших фильмов (пример):*\n\n"
-                "1. Побег из Шоушенка (1994) ⭐ 9.1\n"
-                "2. Крестный отец (1972) ⭐ 9.0\n"
-                "3. Темный рыцарь (2008) ⭐ 9.0\n"
-                "...",
-                parse_mode='Markdown',
+                "Не удалось загрузить топ фильмов. Попробуйте позже.",
                 reply_markup=get_main_keyboard()
             )
             return
@@ -451,44 +412,13 @@ async def show_top250(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Ошибка загрузки топа: {e}")
         await update.message.reply_text(
-            "⭐ *Топ-10 лучших фильмов (пример):*\n\n"
-            "1. Побег из Шоушенка (1994) ⭐ 9.1\n"
-            "2. Крестный отец (1972) ⭐ 9.0\n"
-            "3. Темный рыцарь (2008) ⭐ 9.0\n"
-            "...",
-            parse_mode='Markdown',
+            "❌ Не удалось загрузить топ фильмов. Попробуйте позже.",
             reply_markup=get_main_keyboard()
         )
 
 async def random_real_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Случайный фильм из базы или топ-250 - ИСПРАВЛЕННЫЙ"""
-    import random
-
-    # Список популярных фильмов для fallback
-    popular_movies = [
-        {"title": "Начало", "year": "2010", "rating": "8.8", "genre": "фантастика, триллер",
-         "desc": "Воры внедряются в сны, чтобы украсть идеи.", "country": "США, Великобритания"},
-        {"title": "Зеленая миля", "year": "1999", "rating": "9.1", "genre": "драма, фэнтези",
-         "desc": "История надзирателя в тюрьме для смертников.", "country": "США"},
-        {"title": "Форрест Гамп", "year": "1994", "rating": "8.8", "genre": "драма, мелодрама",
-         "desc": "Жизнь человека с низким IQ, который стал свидетелем ключевых событий истории.", "country": "США"},
-        {"title": "Поймай меня, если сможешь", "year": "2002", "rating": "8.1", "genre": "криминал, драма",
-         "desc": "Подросток-аферист выдает себя за пилота, врача и юриста.", "country": "США, Канада"},
-        {"title": "Побег из Шоушенка", "year": "1994", "rating": "9.1", "genre": "драма",
-         "desc": "Бухгалтер Энди Дюфрейн оказывается в тюрьме на пожизненный срок.", "country": "США"},
-        {"title": "Криминальное чтиво", "year": "1994", "rating": "8.9", "genre": "криминал, драма",
-         "desc": "Несколько переплетающихся историй о жизни мелких преступников.", "country": "США"},
-        {"title": "Властелин колец: Братство кольца", "year": "2001", "rating": "8.8", "genre": "фэнтези, приключения",
-         "desc": "Средиземье. Хоббит Фродо должен уничтожить Кольцо Всевластья.", "country": "Новая Зеландия, США"},
-        {"title": "Леон", "year": "1994", "rating": "8.8", "genre": "боевик, триллер",
-         "desc": "Профессиональный убийца Леон знакомится со своей соседкой Матильдой.", "country": "Франция, США"},
-        {"title": "Король Лев", "year": "1994", "rating": "8.8", "genre": "мультфильм, драма",
-         "desc": "Львенок Симба познает круговорот жизни в африканской саванне.", "country": "США"},
-        {"title": "Титаник", "year": "1997", "rating": "8.4", "genre": "драма, мелодрама",
-         "desc": "Молодые влюбленные Джек и Роза на борту «Титаника».", "country": "США, Мексика"},
-    ]
-
-    movie = random.choice(popular_movies)
+    """Обработчик команды /random - случайный фильм"""
+    movie = random.choice(POPULAR_MOVIES)
 
     text = f"🎲 *Случайный фильм для тебя:*\n\n"
     text += f"🎬 *{movie['title']}* ({movie['year']})\n"
@@ -510,7 +440,7 @@ async def random_real_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def show_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Показать watchlist - ИСПРАВЛЕННЫЙ"""
+    """Обработчик команды /watchlist - показывает Watchlist"""
     if not db_manager:
         await update.message.reply_text(
             "📋 *Мой Watchlist*\n\n"
@@ -566,8 +496,164 @@ async def show_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_keyboard()
         )
 
+# ==================== ОБРАБОТЧИК ТЕКСТОВЫХ СООБЩЕНИЙ ====================
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработка текстовых сообщений и кнопок быстрого действия"""
+    text = update.message.text
+
+    # Сохраняем оригинальный текст для логирования
+    original_text = text
+
+    # Приводим к нижнему регистру для сравнения
+    text_lower = text.lower()
+
+    logger.info(f"Получено сообщение: '{original_text}'")
+
+    # Обработка кнопок
+    button_actions = {
+        "🔍 поиск фильма": lambda: update.message.reply_text(
+            "Введите название фильма или сериала:\nНапример: *Матрица* или *Игра престолов*",
+            parse_mode='Markdown'
+        ).then(lambda: context.user_data.update({'waiting_for': 'search'})),
+
+        "🎭 по жанру": lambda: update.message.reply_text(
+            "Выберите жанр:",
+            reply_markup=get_genre_keyboard()
+        ),
+
+        "⭐ топ 250": lambda: show_top250(update, context),
+
+        "🎲 случайный": lambda: random_real_movie(update, context),
+
+        "📋 мой watchlist": lambda: show_watchlist(update, context),
+
+        "ℹ️ помощь": lambda: help_command(update, context),
+
+        "🔙 на главную": lambda: update.message.reply_text(
+            "Возвращаю на главную...",
+            reply_markup=get_main_keyboard()
+        ),
+    }
+
+    # Проверяем точное совпадение с кнопками (в нижнем регистре)
+    if text_lower in button_actions:
+        await button_actions[text_lower]()
+        return
+
+    # Обработка жанров (точное совпадение с учетом регистра)
+    genre_buttons = {
+        "🎭 Драма": "драма",
+        "😂 Комедия": "комедия",
+        "🔫 Боевик": "боевик",
+        "👻 Ужасы": "ужасы",
+        "🚀 Фантастика": "фантастика",
+        "🔍 Детектив": "детектив",
+        "❤️ Мелодрама": "мелодрама",
+        "🧩 Триллер": "триллер",
+        "🎬 Приключения": "приключения"
+    }
+
+    if text in genre_buttons:
+        genre = genre_buttons[text]
+        await search_by_genre(update, context, genre)
+        return
+
+    # Обработка ввода после нажатия кнопки поиска
+    if 'waiting_for' in context.user_data and context.user_data['waiting_for'] == 'search':
+        await execute_search(update, text)
+        context.user_data.pop('waiting_for', None)
+        return
+
+    # Если сообщение содержит только цифры (например, "250"), игнорируем
+    if text.strip().isdigit() and len(text.strip()) <= 3:
+        logger.info(f"Игнорируем числовой запрос: '{text}'")
+        await update.message.reply_text(
+            "Используйте кнопки ниже для навигации 👇",
+            reply_markup=get_main_keyboard()
+        )
+        return
+
+    # Прямые текстовые запросы (исключая команды)
+    if text and len(text.strip()) > 2 and not text.strip().startswith('/'):
+        await execute_search(update, text)
+        return
+
+    # Если ничего не подошло
+    await update.message.reply_text(
+        "Введите название фильма для поиска или используйте кнопки ниже 👇",
+        reply_markup=get_main_keyboard()
+    )
+
+async def search_by_genre(update: Update, context: ContextTypes.DEFAULT_TYPE, genre: str):
+    """Поиск фильмов по жанру"""
+    await update.message.reply_text(f"🎭 Ищу фильмы в жанре *{genre}*...", parse_mode='Markdown')
+
+    if not api_client or not api_client.is_active:
+        # Тестовые данные для жанра
+        await update.message.reply_text(
+            f"🎭 *Фильмы в жанре {genre}:*\n\n"
+            "1. Пример фильма 1 (2000) ⭐ 8.5\n"
+            "2. Пример фильма 2 (2010) ⭐ 8.0\n"
+            "3. Пример фильма 3 (2020) ⭐ 7.8\n\n"
+            "⚠️ API не активен, показаны примеры",
+            parse_mode='Markdown',
+            reply_markup=get_main_keyboard()
+        )
+        return
+
+    try:
+        genre_id = GENRE_MAP.get(genre.lower())
+        if not genre_id:
+            await update.message.reply_text(f"Жанр «{genre}» не найден в базе.")
+            return
+
+        result = api_client.get_films_by_filters(genre_id=genre_id, rating_from=7)
+        films = result.get('items', [])[:5]
+
+        if not films:
+            await update.message.reply_text(
+                f"По жанру «{genre}» ничего не найдено.\n"
+                "Попробуйте другой жанр.",
+                reply_markup=get_genre_keyboard()
+            )
+            return
+
+        text = f"🎭 *Лучшие фильмы в жанре {genre}:*\n\n"
+        for i, film in enumerate(films, 1):
+            title = film.get('nameRu') or 'Без названия'
+            year = film.get('year', '')
+            rating = film.get('ratingKinopoisk', '')
+
+            text += f"{i}. *{title}*"
+            if year:
+                text += f" ({year})"
+            if rating:
+                text += f" ⭐ {rating}"
+            text += "\n"
+
+        await update.message.reply_text(
+            text,
+            parse_mode='Markdown',
+            reply_markup=get_main_keyboard()
+        )
+
+    except Exception as e:
+        logger.error(f"Ошибка поиска по жанру: {e}")
+        await update.message.reply_text(
+            f"🎭 *Фильмы в жанре {genre}:*\n\n"
+            "1. Пример фильма 1 (2000) ⭐ 8.5\n"
+            "2. Пример фильма 2 (2010) ⭐ 8.0\n"
+            "3. Пример фильма 3 (2020) ⭐ 7.8\n\n"
+            "⚠️ Ошибка API, показаны примеры",
+            parse_mode='Markdown',
+            reply_markup=get_main_keyboard()
+        )
+
+# ==================== ОБРАБОТЧИК INLINE-КНОПОК ====================
+
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик inline-кнопок - ПОЛНОСТЬЮ ИСПРАВЛЕННЫЙ"""
+    """Обработчик inline-кнопок"""
     query = update.callback_query
     await query.answer()
 
@@ -633,14 +719,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data.startswith("search_"):
         # Поиск похожих по названию
         film_title = data.split('_', 1)[1]
-        await search_command(query, context, film_title)
+        await execute_search(update, film_title)
 
     else:
         # Неизвестная кнопка
         await query.edit_message_text(f"Действие: {data}")
 
 async def show_film_info(query, film_id: str):
-    """Показать информацию о фильме - ИСПРАВЛЕННАЯ"""
+    """Показать информацию о фильме"""
     try:
         if not api_client or not api_client.is_active:
             await query.edit_message_text(
@@ -689,7 +775,7 @@ async def show_film_info(query, film_id: str):
         await query.edit_message_text("❌ Ошибка при загрузке информации.")
 
 async def show_similar_films(query, film_id: str):
-    """Показать похожие фильмы - ИСПРАВЛЕННАЯ"""
+    """Показать похожие фильмы"""
     try:
         if not api_client or not api_client.is_active:
             await query.edit_message_text(
@@ -717,29 +803,3 @@ async def show_similar_films(query, film_id: str):
     except Exception as e:
         logger.error(f"Ошибка получения похожих фильмов: {e}")
         await query.edit_message_text("😔 Не нашёл похожих фильмов.")
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /help"""
-    help_text = """
-📚 *MovieMate Bot — помощник по фильмам*
-
-🎯 *Основные функции:*
-• Поиск фильмов и сериалов
-• Топ-250 лучших фильмов
-• Подбор по жанрам
-• Случайные рекомендации
-• Список «Посмотреть позже»
-
-⌨️ *Используй кнопки или команды:*
-• /start — запустить бота
-• /search <название> — поиск фильма
-• /top — топ-250 фильмов  
-• /random — случайный фильм
-• /help — эта справка
-
-🎬 *Примеры запросов:*
-• «Матрица»
-• «Детектив 90-х»
-• «Лучшие комедии 2000-х»
-"""
-    await update.message.reply_text(help_text, parse_mode='Markdown', reply_markup=get_main_keyboard())
