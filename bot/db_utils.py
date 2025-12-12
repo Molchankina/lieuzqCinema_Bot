@@ -37,52 +37,61 @@ class DatabaseManager:
             self.session.rollback()
             return None
 
-    def add_to_watchlist(self, user_id: int, movie_data: dict) -> Optional[Watchlist]:
+    def add_to_watchlist(self, user_id: int, movie_data: dict) -> bool:
         """Добавить фильм в watchlist"""
         try:
-            # Сначала создаем или находим фильм
-            movie = self.session.query(Movie).filter_by(
+            # Сначала ищем пользователя
+            user = self.session.query(User).filter_by(telegram_id=user_id).first()
+            if not user:
+                # Создаем пользователя если его нет
+                user = User(telegram_id=user_id)
+                self.session.add(user)
+                self.session.commit()
+
+            # Проверяем, есть ли уже такой фильм
+            existing_movie = self.session.query(Movie).filter_by(
                 tmdb_id=movie_data.get('id')
             ).first()
 
-            if not movie:
-                movie = Movie(
-                    tmdb_id=movie_data.get('id'),
-                    title=movie_data.get('title') or movie_data.get('name', ''),
-                    original_title=movie_data.get('original_title') or movie_data.get('original_name', ''),
-                    release_date=movie_data.get('release_date') or movie_data.get('first_air_date', ''),
+            if not existing_movie:
+                # Создаем запись о фильме
+                existing_movie = Movie(
+                    tmdb_id=movie_data.get('id', 0),
+                    title=movie_data.get('title', ''),
+                    original_title=movie_data.get('original_title', ''),
+                    release_date=movie_data.get('release_date', ''),
                     overview=movie_data.get('overview', ''),
                     poster_url=movie_data.get('poster_path', ''),
                     media_type=movie_data.get('media_type', 'movie'),
-                    genres=str(movie_data.get('genres', [])),
+                    genres=movie_data.get('genres', ''),
                     vote_average=movie_data.get('vote_average', 0.0)
                 )
-                self.session.add(movie)
+                self.session.add(existing_movie)
                 self.session.commit()
 
             # Проверяем, не добавлен ли уже в watchlist
-            existing = self.session.query(Watchlist).filter_by(
-                user_id=user_id,
-                movie_id=movie.id
+            existing_watchlist = self.session.query(Watchlist).filter_by(
+                user_id=user.id,
+                movie_id=existing_movie.id
             ).first()
 
-            if existing:
-                return existing
+            if existing_watchlist:
+                return False  # Уже в watchlist
 
             # Добавляем в watchlist
             watchlist_item = Watchlist(
-                user_id=user_id,
-                movie_id=movie.id
+                user_id=user.id,
+                movie_id=existing_movie.id
             )
             self.session.add(watchlist_item)
             self.session.commit()
 
-            return watchlist_item
+            return True
 
         except Exception as e:
-            logger.error(f"Ошибка при добавлении в watchlist: {e}")
+            logger.error(f"Ошибка добавления в watchlist: {e}")
             self.session.rollback()
-            return None
+            return False
 
     def get_watchlist(self, user_id: int, limit: int = 20) -> List[dict]:
         """Получить watchlist пользователя"""
