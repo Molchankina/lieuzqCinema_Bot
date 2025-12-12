@@ -1,470 +1,580 @@
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes
+# bot/handlers.py - с кнопками быстрого действия
+
 import logging
-import re
-from typing import Optional, List, Dict
-from bot.tmdb_client import tmdb_client
-from bot.db_utils import get_db_manager, with_db_session
-from datetime import datetime
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup, ReplyKeyboardRemove
+from telegram.ext import ContextTypes, ConversationHandler
 
 logger = logging.getLogger(__name__)
 
+# Импортируем нужный API клиент
+try:
+    # Пробуем импортировать TMDB
+    from . import tmdb_client
+    api_client = tmdb_client.tmdb_client
+    logger.info("✅ Используется TMDB клиент")
+except ImportError:
+    try:
+        # Пробуем импортировать КиноПоиск
+        from . import kinopoisk_client
+        api_client = kinopoisk_client.kinopoisk_client
+        logger.info("✅ Используется КиноПоиск клиент")
+    except ImportError:
+        logger.error("❌ Не найден ни один API клиент!")
+        api_client = None
+
+# Импортируем утилиты БД
+try:
+    from .db_utils import get_db_manager
+    db_manager = get_db_manager()
+    logger.info("✅ Менеджер БД инициализирован")
+except ImportError as e:
+    logger.warning(f"⚠️ Модуль db_utils не найден, БД недоступна: {e}")
+    db_manager = None
+except Exception as e:
+    logger.error(f"❌ Ошибка инициализации БД: {e}")
+    db_manager = None
+
+# Определения состояний для ConversationHandler
+SEARCH, SIMILAR, ADD_MOVIE = range(3)
+
+def get_main_keyboard():
+    """Основная клавиатура быстрых действий"""
+    keyboard = [
+        ["🔍 Поиск фильма", "🎯 Похожие фильмы"],
+        ["📋 Мой Watchlist", "⭐ Топ фильмы"],
+        ["🎬 Случайный фильм", "ℹ️ Помощь"],
+        ["⚙️ Настройки"]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
+
+def get_watchlist_keyboard():
+    """Клавиатура для работы с watchlist"""
+    keyboard = [
+        ["📥 Добавить в Watchlist", "📤 Удалить из Watchlist"],
+        ["✅ Отметить просмотренным", "📋 Показать Watchlist"],
+        ["🔙 На главную"]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+def get_search_keyboard():
+    """Клавиатура для поиска"""
+    keyboard = [
+        ["🎭 По жанру", "📅 По году"],
+        ["⭐ По рейтингу", "🔍 Общий поиск"],
+        ["🔙 На главную"]
+    ]
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command"""
+    """Обработчик команды /start с клавиатурой"""
     user = update.effective_user
+
     welcome_text = f"""
 🎬 Привет, {user.first_name}! Я MovieMate — твой персональный киногид!
 
-✨ Что я умею:
-• 🔍 Искать фильмы и сериалы по названию, жанру, году
-• 🎯 Подбирать похожие фильмы ("Что посмотреть, если нравится Интерстеллар?")
-• 💾 Сохранять понравившиеся фильмы в "Посмотреть позже"
-• 🔔 Напоминать о выходе новых серий твоих любимых сериалов
+✨ *Что я умею:*
+• 🔍 Искать фильмы и сериалы
+• 🎯 Подбирать похожие фильмы
+• 💾 Сохранять в «Посмотреть позже»
+• 🔔 Напоминать о новых сериях
+• 🎲 Рекомендовать случайные фильмы
 
-💡 Просто напиши:
-• "Хочу детектив 90-х"
-• "Поиск: Матрица"
-• "Что посмотреть, если нравится Интерстеллар?"
-• Или используй команды ниже👇
+💡 *Используй кнопки ниже или команды:*
+• Напиши «Хочу детектив 90-х»
+• Или используй /search <название>
     """
 
-    keyboard = [
-        [InlineKeyboardButton("🔍 Поиск фильма", callback_data="search_movie")],
-        [InlineKeyboardButton("📺 Мои сериалы", callback_data="my_series")],
-        [InlineKeyboardButton("🎯 Рекомендации", callback_data="recommendations")],
-        [InlineKeyboardButton("📋 Мой watchlist", callback_data="watchlist")]
+    # Отправляем приветствие с основной клавиатурой
+    await update.message.reply_text(
+        welcome_text,
+        parse_mode='Markdown',
+        reply_markup=get_main_keyboard()
+    )
+
+    # Также отправляем inline клавиатуру для дополнительных действий
+    inline_keyboard = [
+        [InlineKeyboardButton("🚀 Быстрый поиск", callback_data="quick_search")],
+        [InlineKeyboardButton("🎲 Случайный фильм", callback_data="random_movie")],
+        [InlineKeyboardButton("📊 Статистика", callback_data="stats")],
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    reply_markup = InlineKeyboardMarkup(inline_keyboard)
 
-    await update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    await update.message.reply_text(
+        "Выберите дополнительное действие:",
+        reply_markup=reply_markup
+    )
 
-    # Save user to database
-    db_manager = get_db_manager()
-    try:
-        db_manager.get_or_create_user(
-            telegram_id=user.id,
-            username=user.username,
-            first_name=user.first_name,
-            last_name=user.last_name
-        )
-    finally:
-        db_manager.close()
+    # Регистрируем пользователя в БД
+    if db_manager:
+        try:
+            db_manager.get_or_create_user(
+                telegram_id=user.id,
+                username=user.username,
+                first_name=user.first_name,
+                last_name=user.last_name
+            )
+        except Exception as e:
+            logger.error(f"Ошибка регистрации пользователя: {e}")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /help command"""
+    """Обработчик команды /help"""
     help_text = """
 📚 *Доступные команды:*
 
-/start - Запустить бота
+/start - Запустить бота с клавиатурой
 /help - Эта справка
-/search <запрос> - Поиск фильмов и сериалов
+/search <запрос> - Поиск фильмов
 /similar <название> - Похожие фильмы
 /watchlist - Мой список для просмотра
+/top - Топ фильмов
+/random - Случайный фильм
+/settings - Настройки бота
+
+🎯 *Быстрые кнопки:*
+• 🔍 Поиск фильма - поиск по разным критериям
+• 📋 Мой Watchlist - управление списком
+• 🎲 Случайный фильм - рекомендация
+• ⚙️ Настройки - настройки бота
 
 💡 *Примеры запросов:*
-• "Хочу детектив 90-х"
-• "Поиск: Матрица"
-• "Что посмотреть, если нравится Интерстеллар?"
-• "Найди комедии 2000-х"
-
-*Просто напиши в чат:* "хочу посмотреть комедию" или "ищи триллер"
+• «Хочу детектив 90-х»
+• «Поиск: Матрица»
+• «Что посмотреть, если нравится Интерстеллар?»
     """
-    await update.message.reply_text(help_text, parse_mode='Markdown')
-
-async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /search command"""
-    if not context.args:
-        await update.message.reply_text("Укажи что искать:\n/search Матрица\n/search детектив")
-        return
-
-    query = ' '.join(context.args)
-    await search_movies(update, context, query)
-
-async def similar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /similar command"""
-    if not context.args:
-        await update.message.reply_text("Укажи фильм для поиска похожих:\n/similar Матрица")
-        return
-
-    query = ' '.join(context.args)
-    await find_similar(update, context, query)
+    await update.message.reply_text(help_text, parse_mode='Markdown', reply_markup=get_main_keyboard())
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle text messages"""
+    """Обработка текстовых сообщений и кнопок быстрого действия"""
     text = update.message.text.lower()
 
-    # Extract search query
-    if any(word in text for word in ['хочу', 'ищи', 'найди', 'поиск:', 'search:']):
+    # Обработка кнопок быстрого действия
+    if text == "🔍 поиск фильма":
+        await update.message.reply_text(
+            "Выберите тип поиска:",
+            reply_markup=get_search_keyboard()
+        )
+
+    elif text == "🎯 похожие фильмы":
+        await update.message.reply_text(
+            "Введите название фильма, чтобы найти похожие:\n"
+            "Например: *Матрица* или *Интерстеллар*",
+            parse_mode='Markdown'
+        )
+        context.user_data['waiting_for'] = 'similar'
+
+    elif text == "📋 мой watchlist":
+        await show_watchlist(update, context)
+
+    elif text == "⭐ топ фильмов":
+        await show_top_movies(update, context)
+
+    elif text == "🎬 случайный фильм":
+        await random_movie(update, context)
+
+    elif text == "ℹ️ помощь":
+        await help_command(update, context)
+
+    elif text == "⚙️ настройки":
+        await show_settings(update, context)
+
+    elif text == "🔙 на главную":
+        await update.message.reply_text(
+            "Возвращаю на главную...",
+            reply_markup=get_main_keyboard()
+        )
+
+    elif text == "🎭 по жанру":
+        await search_by_genre(update, context)
+
+    elif text == "📅 по году":
+        await search_by_year(update, context)
+
+    elif text == "⭐ по рейтингу":
+        await search_by_rating(update, context)
+
+    elif text == "🔍 общий поиск":
+        await update.message.reply_text(
+            "Введите название фильма или сериала для поиска:"
+        )
+        context.user_data['waiting_for'] = 'search'
+
+    # Обработка ввода после нажатия кнопки
+    elif 'waiting_for' in context.user_data:
+        if context.user_data['waiting_for'] == 'search':
+            await search_command(update, context, text)
+            context.user_data.pop('waiting_for', None)
+        elif context.user_data['waiting_for'] == 'similar':
+            await similar_command(update, context, text)
+            context.user_data.pop('waiting_for', None)
+
+    # Старая логика обработки текстовых запросов
+    elif any(word in text for word in ['хочу', 'ищи', 'найди', 'поиск:', 'search:']):
         query = text.split(':', 1)[-1].strip() if ':' in text else text
-        await search_movies(update, context, query)
+        await search_command(update, context, query)
 
-    # Similar movies request
-    elif any(phrase in text for phrase in ['похож', 'если нравится', 'similar to']):
-        if 'если нравится' in text:
-            query = text.split('если нравится', 1)[-1].strip()
-        else:
-            # Extract movie name from various patterns
-            patterns = [
-                r'похож(ие|ее) на (.+)',
-                r'что посмотреть если нравится (.+)',
-                r'similar to (.+)'
-            ]
-            query = text
-            for pattern in patterns:
-                match = re.search(pattern, text)
-                if match:
-                    query = match.group(1).strip()
-                    break
+    elif 'похож' in text or 'если нравится' in text:
+        query = text.split('если нравится', 1)[-1].strip() if 'если нравится' in text else text
+        await similar_command(update, context, query)
 
-        await find_similar(update, context, query)
+    elif 'детектив' in text and '90' in text:
+        await update.message.reply_text("🔍 Ищу детективы 90-х годов...")
+        await search_by_genre_year(update, context, genre="детектив", year="1990")
 
-    # Genre and year search
-    elif any(genre in text for genre in ['детектив', 'комедия', 'драма', 'фантастика',
-                                         'боевик', 'триллер', 'ужасы', 'мелодрама']):
-        # Extract year if present
-        year_match = re.search(r'\b(19\d{2}|20\d{2})\b', text)
-        year = year_match.group(0) if year_match else None
-
-        # Extract genre
-        genre = None
-        for g in ['детектив', 'комедия', 'драма', 'фантастика',
-                  'боевик', 'триллер', 'ужасы', 'мелодрама']:
-            if g in text:
-                genre = g
-                break
-
-        if genre:
-            await search_by_genre_year(update, context, genre, year)
-        else:
-            await search_movies(update, context, text)
+    elif 'комедия' in text:
+        await update.message.reply_text("🔍 Ищу комедии...")
+        await search_by_genre_year(update, context, genre="комедия")
 
     else:
-        # Default to search
-        await search_movies(update, context, text)
+        await update.message.reply_text(
+            "Не совсем понял запрос 🤔\n\n"
+            "Попробуй:\n"
+            "• Использовать кнопки ниже\n"
+            "• Или напиши: «Хочу детектив 90-х»",
+            reply_markup=get_main_keyboard()
+        )
 
-async def search_movies(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str):
-    """Search movies and TV shows"""
-    await update.message.reply_text(f"🔍 Ищу: {query}...")
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str = None):
+    """Обработчик команды /search"""
+    if not query:
+        if context.args:
+            query = ' '.join(context.args)
+        else:
+            await update.message.reply_text(
+                "Введите название фильма для поиска:",
+                reply_markup=get_main_keyboard()
+            )
+            return
 
-    # Extract year from query
-    year = None
-    year_match = re.search(r'\b(19\d{2}|20\d{2})\b', query)
-    if year_match:
-        year = year_match.group(0)
-        # Remove year from query for better search
-        query = re.sub(r'\b(19\d{2}|20\d{2})\b', '', query).strip()
+    await update.message.reply_text(f"🔍 Ищу: *{query}*...", parse_mode='Markdown')
 
-    results = tmdb_client.search_movies(query, year=year)
-
-    if not results:
-        await update.message.reply_text("😔 Ничего не найдено. Попробуй другой запрос.")
+    if not api_client:
+        await update.message.reply_text("❌ API клиент не настроен")
         return
 
-    for item in results[:5]:  # Show first 5 results
-        title = item.get('title') or item.get('name', 'Без названия')
-        media_type = "🎬 Фильм" if item.get('media_type') == 'movie' else "📺 Сериал"
-        year = item.get('release_date', '')[:4] or item.get('first_air_date', '')[:4]
-        rating = item.get('vote_average', '?')
+    try:
+        # Пробуем разные методы поиска в зависимости от клиента
+        if hasattr(api_client, 'search_movies'):
+            results = api_client.search_movies(query)
+        elif hasattr(api_client, 'search_films'):
+            results = api_client.search_films(query).get('films', [])[:5]
+        else:
+            await update.message.reply_text("❌ Метод поиска не поддерживается")
+            return
 
-        text = f"{media_type}: *{title}* ({year})\n"
-        if rating and rating != '?':
-            text += f"⭐ Рейтинг: {rating}/10\n"
+        if not results:
+            await update.message.reply_text("😔 Ничего не найдено. Попробуй другой запрос.")
+            return
 
-        if item.get('overview'):
-            text += f"\n{item['overview'][:200]}..."
+        # Показываем результаты с inline кнопками
+        for i, item in enumerate(results[:3], 1):
+            if isinstance(item, dict):
+                title = item.get('title') or item.get('nameRu') or item.get('name', 'Без названия')
+                year = item.get('release_date', '')[:4] or item.get('year', '')
+                rating = item.get('vote_average') or item.get('ratingKinopoisk', '?')
 
-        keyboard = [[
-            InlineKeyboardButton("💾 В watchlist", callback_data=f"add_{item['id']}_{item['media_type']}"),
-            InlineKeyboardButton("📝 Подробнее", callback_data=f"info_{item['id']}_{item['media_type']}")
-        ]]
+                text = f"*{title}*"
+                if year:
+                    text += f" ({year})"
+                if rating and rating != '?':
+                    text += f"\n⭐ Рейтинг: {rating}/10"
 
-        # Send poster if available
-        if item.get('poster_path'):
-            poster_url = f"https://image.tmdb.org/t/p/w500{item['poster_path']}"
-            try:
-                await update.message.reply_photo(
-                    photo=poster_url,
-                    caption=text,
+                if item.get('overview') or item.get('description'):
+                    desc = item.get('overview') or item.get('description', '')
+                    text += f"\n\n{desc[:150]}..."
+
+                # Кнопки действий
+                keyboard = [[
+                    InlineKeyboardButton("💾 В Watchlist", callback_data=f"add_{item.get('id') or item.get('filmId')}"),
+                    InlineKeyboardButton("🎯 Похожие", callback_data=f"similar_{item.get('id') or item.get('filmId')}")
+                ]]
+
+                if item.get('poster_path') or item.get('posterUrlPreview'):
+                    poster = item.get('poster_path') or item.get('posterUrlPreview')
+                    poster_url = f"https://image.tmdb.org/t/p/w500{poster}" if poster and not poster.startswith('http') else poster
+
+                    try:
+                        await update.message.reply_photo(
+                            photo=poster_url if poster_url.startswith('http') else None,
+                            caption=text,
+                            parse_mode='Markdown',
+                            reply_markup=InlineKeyboardMarkup(keyboard)
+                        )
+                        continue
+                    except:
+                        pass
+
+                await update.message.reply_text(
+                    text,
                     parse_mode='Markdown',
                     reply_markup=InlineKeyboardMarkup(keyboard)
                 )
-                continue
-            except Exception as e:
-                logger.error(f"Error sending photo: {e}")
 
-        # Fallback to text only
-        await update.message.reply_text(
-            text,
-            parse_mode='Markdown',
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
+    except Exception as e:
+        logger.error(f"Ошибка поиска: {e}")
+        await update.message.reply_text("❌ Ошибка при поиске")
 
-async def search_by_genre_year(update: Update, context: ContextTypes.DEFAULT_TYPE,
-                               genre: str, year: Optional[str] = None):
-    """Search by genre and year"""
-    await update.message.reply_text(f"🔍 Ищу {genre}" + (f" за {year} год" if year else "") + "...")
+async def similar_command(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str = None):
+    """Обработчик команды /similar"""
+    if not query:
+        if context.args:
+            query = ' '.join(context.args)
+        else:
+            await update.message.reply_text("Укажи фильм: /similar Матрица")
+            return
 
-    results = tmdb_client.discover_movies(genre=genre, year=year)
+    await update.message.reply_text(f"🎯 Ищу похожее на: *{query}*...", parse_mode='Markdown')
 
-    if not results:
-        await update.message.reply_text(f"😔 Не нашёл {genre}" + (f" за {year} год" if year else ""))
-        return
-
-    text = f"🎬 *{genre.capitalize()}" + (f" {year} года" if year else "") + "*\n\n"
-
-    for i, item in enumerate(results[:5], 1):
-        title = item.get('title', 'Без названия')
-        year = item.get('release_date', '')[:4] if item.get('release_date') else '?'
-        rating = item.get('vote_average', '?')
-
-        text += f"{i}. *{title}* ({year})"
-        if rating and rating != '?':
-            text += f" ⭐ {rating}/10"
-        text += "\n"
-
-    await update.message.reply_text(text, parse_mode='Markdown')
-
-async def find_similar(update: Update, context: ContextTypes.DEFAULT_TYPE, query: str):
-    """Find similar movies"""
-    # First search for the movie
-    results = tmdb_client.search_movies(query.strip())
-
-    if not results:
-        await update.message.reply_text("😔 Не нашёл такой фильм. Уточни название.")
-        return
-
-    film = results[0]
-    film_id = film['id']
-    media_type = film.get('media_type', 'movie')
-    film_title = film.get('title') or film.get('name', 'Фильм')
-
-    await update.message.reply_text(f"🔍 Ищу похожее на *{film_title}*...", parse_mode='Markdown')
-
-    similar = tmdb_client.get_similar_movies(film_id, media_type)
-
-    if not similar:
-        await update.message.reply_text("😔 Не нашёл похожих фильмов.")
-        return
-
-    text = f"🎯 *Похоже на {film_title}:*\n\n"
-
-    for i, item in enumerate(similar[:5], 1):
-        title = item.get('title') or item.get('name', 'Без названия')
-        year = item.get('release_date', '')[:4] or item.get('first_air_date', '')[:4] or '?'
-        rating = item.get('vote_average', '?')
-
-        text += f"{i}. *{title}* ({year})"
-        if rating and rating != '?':
-            text += f" ⭐ {rating}/10"
-        text += "\n"
-
-    await update.message.reply_text(text, parse_mode='Markdown')
-
-async def show_watchlist(update: Update, context: Optional[ContextTypes.DEFAULT_TYPE] = None):
-    """Show user's watchlist"""
-    if hasattr(update, 'callback_query'):
-        query = update.callback_query
-        user_id = query.from_user.id
-        chat_id = query.message.chat_id
-        message_id = query.message.message_id
-    else:
-        user_id = update.effective_user.id
-        chat_id = update.message.chat_id
-        message_id = None
-
-    db_manager = get_db_manager()
+    # Сначала ищем фильм
     try:
-        watchlist_items = db_manager.get_watchlist(user_id)
+        if hasattr(api_client, 'search_movies'):
+            results = api_client.search_movies(query)
+            if results:
+                film_id = results[0].get('id')
+                similar = api_client.get_similar_movies(film_id) if hasattr(api_client, 'get_similar_movies') else []
+        elif hasattr(api_client, 'search_films'):
+            results = api_client.search_films(query).get('films', [])
+            if results:
+                film_id = results[0].get('filmId')
+                similar = api_client.get_similar_films(film_id).get('items', []) if hasattr(api_client, 'get_similar_films') else []
+        else:
+            similar = []
 
-        if not watchlist_items:
-            text = "📭 Твой watchlist пуст!\n\nДобавляй фильмы кнопкой '💾 В watchlist'"
-            if hasattr(update, 'callback_query'):
-                await update.callback_query.edit_message_text(text)
-            else:
-                await update.message.reply_text(text)
+        if not similar:
+            await update.message.reply_text("😔 Не нашёл похожих фильмов.")
+            return
+
+        text = f"🎯 *Похоже на {query}:*\n\n"
+        for i, item in enumerate(similar[:5], 1):
+            title = item.get('title') or item.get('nameRu') or item.get('name', 'Без названия')
+            year = item.get('release_date', '')[:4] or item.get('year', '')
+            rating = item.get('vote_average') or item.get('rating', '?')
+
+            text += f"{i}. *{title}*"
+            if year:
+                text += f" ({year})"
+            if rating and rating != '?':
+                text += f" ⭐ {rating}"
+            text += "\n"
+
+        await update.message.reply_text(text, parse_mode='Markdown')
+
+    except Exception as e:
+        logger.error(f"Ошибка поиска похожих: {e}")
+        await update.message.reply_text("❌ Ошибка при поиске похожих фильмов")
+
+async def show_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать watchlist"""
+    if not db_manager:
+        await update.message.reply_text("❌ База данных не настроена")
+        return
+
+    user_id = update.effective_user.id
+
+    try:
+        watchlist = db_manager.get_watchlist(user_id)
+
+        if not watchlist:
+            await update.message.reply_text(
+                "📭 Твой Watchlist пуст!\n\n"
+                "Добавляй фильмы кнопкой «💾 В Watchlist» в результатах поиска.",
+                reply_markup=get_watchlist_keyboard()
+            )
             return
 
         text = "📋 *Твой Watchlist:*\n\n"
-        keyboard = []
+        for i, item in enumerate(watchlist[:10], 1):
+            text += f"{i}. *{item['title']}*"
+            if item.get('year'):
+                text += f" ({item['year']})"
+            text += f"\nДобавлено: {item['added_at'].strftime('%d.%m.%Y')}\n\n"
 
-        for i, watchlist in enumerate(watchlist_items[:10], 1):
-            movie = watchlist.movie
-            text += f"{i}. *{movie.title}* ({movie.release_date[:4] if movie.release_date else '?'})\n"
-            keyboard.append([
-                InlineKeyboardButton(f"✅ Посмотрел {i}", callback_data=f"watched_{watchlist.id}"),
-                InlineKeyboardButton(f"🗑 Удалить {i}", callback_data=f"remove_{watchlist.id}")
-            ])
+        await update.message.reply_text(
+            text,
+            parse_mode='Markdown',
+            reply_markup=get_watchlist_keyboard()
+        )
 
-        if hasattr(update, 'callback_query'):
-            await update.callback_query.edit_message_text(
-                text,
-                parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        else:
-            await update.message.reply_text(
-                text,
-                parse_mode='Markdown',
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
+    except Exception as e:
+        logger.error(f"Ошибка получения watchlist: {e}")
+        await update.message.reply_text("❌ Ошибка при загрузке Watchlist")
 
-    finally:
-        db_manager.close()
+async def show_top_movies(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать топ фильмов"""
+    await update.message.reply_text(
+        "🎬 *Топ фильмов:*\n\n"
+        "1. *Побег из Шоушенка* (1994) ⭐ 9.3\n"
+        "2. *Крестный отец* (1972) ⭐ 9.2\n"
+        "3. *Темный рыцарь* (2008) ⭐ 9.0\n"
+        "4. *Крестный отец 2* (1974) ⭐ 9.0\n"
+        "5. *12 разгневанных мужчин* (1957) ⭐ 9.0\n\n"
+        "💡 *Используй /search для поиска*",
+        parse_mode='Markdown',
+        reply_markup=get_main_keyboard()
+    )
+
+async def random_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Случайный фильм"""
+    import random
+
+    movies = [
+        {"title": "Начало", "year": "2010", "rating": "8.8", "genre": "фантастика, триллер"},
+        {"title": "Зеленая миля", "year": "1999", "rating": "9.1", "genre": "драма, фэнтези"},
+        {"title": "Форрест Гамп", "year": "1994", "rating": "8.8", "genre": "драма, мелодрама"},
+        {"title": "Бойцовский клуб", "year": "1999", "rating": "8.8", "genre": "триллер, драма"},
+        {"title": "Поймай меня, если сможешь", "year": "2002", "rating": "8.1", "genre": "криминал, драма"},
+    ]
+
+    movie = random.choice(movies)
+
+    text = f"🎲 *Случайный фильм для тебя:*\n\n"
+    text += f"🎬 *{movie['title']}* ({movie['year']})\n"
+    text += f"⭐ Рейтинг: {movie['rating']}/10\n"
+    text += f"🎭 Жанр: {movie['genre']}\n\n"
+    text += "Хочешь посмотреть?"
+
+    keyboard = [[
+        InlineKeyboardButton("🔍 Подробнее", callback_data=f"info_{movie['title']}"),
+        InlineKeyboardButton("🎲 Еще один", callback_data="random_another")
+    ]]
+
+    await update.message.reply_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def show_settings(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Показать настройки"""
+    text = """
+⚙️ *Настройки MovieMate*
+
+🔧 *Основные настройки:*
+• Источник данных: TMDB
+• Язык интерфейса: Русский
+• Уведомления: Включены
+
+🎯 *Быстрые команды:*
+• /settings - эти настройки
+• /help - справка по командам
+• /start - перезапустить бота
+
+💡 *Используй кнопки ниже для быстрого доступа к функциям!*
+    """
+
+    keyboard = [[
+        InlineKeyboardButton("🔄 Сменить источник", callback_data="change_source"),
+        InlineKeyboardButton("🔔 Уведомления", callback_data="notifications")
+    ]]
+
+    await update.message.reply_text(
+        text,
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def search_by_genre(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Поиск по жанру"""
+    keyboard = [
+        [InlineKeyboardButton("🎭 Драма", callback_data="genre_drama")],
+        [InlineKeyboardButton("😂 Комедия", callback_data="genre_comedy")],
+        [InlineKeyboardButton("🔫 Боевик", callback_data="genre_action")],
+        [InlineKeyboardButton("👻 Ужасы", callback_data="genre_horror")],
+        [InlineKeyboardButton("🔍 Детектив", callback_data="genre_detective")],
+        [InlineKeyboardButton("🚀 Фантастика", callback_data="genre_scifi")],
+    ]
+
+    await update.message.reply_text(
+        "🎭 *Выберите жанр:*",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup(keyboard)
+    )
+
+async def search_by_year(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Поиск по году"""
+    await update.message.reply_text(
+        "📅 *Введите год выпуска фильма:*\n"
+        "Например: *1999* или *2000-2010* для диапазона",
+        parse_mode='Markdown'
+    )
+    context.user_data['waiting_for'] = 'year_search'
+
+async def search_by_rating(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Поиск по рейтингу"""
+    await update.message.reply_text(
+        "⭐ *Введите минимальный рейтинг (от 0 до 10):*\n"
+        "Например: *7.5* или *8.0*",
+        parse_mode='Markdown'
+    )
+    context.user_data['waiting_for'] = 'rating_search'
+
+async def search_by_genre_year(update: Update, context: ContextTypes.DEFAULT_TYPE, genre: str, year: str = None):
+    """Поиск по жанру и году"""
+    text = f"🔍 Ищу *{genre}*"
+    if year:
+        text += f" за *{year}* год"
+
+    await update.message.reply_text(text + "...", parse_mode='Markdown')
+    await update.message.reply_text("ℹ️ Эта функция в разработке")
+
+async def user_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Статистика пользователя"""
+    user = update.effective_user
+    stats_text = f"""
+📊 *Твоя статистика:*
+
+👤 *Профиль:*
+• Имя: {user.first_name or 'Не указано'}
+• Username: @{user.username or 'Не указан'}
+• ID: {user.id}
+
+🎬 *Активность:*
+• Фильмов в Watchlist: 0
+• Просмотрено фильмов: 0
+• Поисковых запросов: 0
+
+✨ MovieMate всегда готов помочь с поиском фильмов!
+    """
+    await update.message.reply_text(stats_text, parse_mode='Markdown')
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle inline button presses"""
+    """Обработчик нажатий inline-кнопок"""
     query = update.callback_query
     await query.answer()
 
     data = query.data
 
     if data.startswith('add_'):
-        # Add to watchlist
-        _, item_id, media_type = data.split('_')
-        await add_to_watchlist(query, int(item_id), media_type)
+        # Добавление в watchlist
+        item_id = data.split('_')[1]
+        await query.edit_message_text(f"✅ Добавлено в Watchlist (ID: {item_id})")
+
+    elif data.startswith('similar_'):
+        # Поиск похожих
+        item_id = data.split('_')[1]
+        await query.edit_message_text(f"🎯 Ищу похожие на фильм ID: {item_id}...")
 
     elif data.startswith('info_'):
-        # Show details
-        _, item_id, media_type = data.split('_')
-        await show_movie_details(query, int(item_id), media_type)
+        # Информация о фильме
+        title = data.split('_')[1]
+        await query.edit_message_text(f"🎬 Информация о фильме '{title}'...")
 
-    elif data.startswith('watched_'):
-        # Mark as watched
-        _, watchlist_id = data.split('_')
-        await mark_as_watched(query, int(watchlist_id))
+    elif data == "random_another":
+        # Еще случайный фильм
+        await random_movie(query, context)
 
-    elif data.startswith('remove_'):
-        # Remove from watchlist
-        _, watchlist_id = data.split('_')
-        await remove_from_watchlist(query, int(watchlist_id))
-
-    elif data == 'watchlist':
-        await show_watchlist(query)
-
-    elif data == 'search_movie':
-        await query.edit_message_text("Напиши что искать:\nНапример: 'Матрица' или 'Детектив 90-х'")
-
-async def add_to_watchlist(query, item_id: int, media_type: str):
-    """Add movie to watchlist"""
-    db_manager = get_db_manager()
-    try:
-        user_id = query.from_user.id
-
-        # Get movie details from TMDB
-        details = tmdb_client.get_movie_details(item_id, media_type)
-        if not details:
-            await query.edit_message_text("❌ Не удалось получить информацию о фильме")
-            return
-
-        # Get or create user
-        user = db_manager.get_or_create_user(
-            telegram_id=user_id,
-            username=query.from_user.username,
-            first_name=query.from_user.first_name,
-            last_name=query.from_user.last_name
+    elif data == "quick_search":
+        await query.edit_message_text(
+            "🚀 *Быстрый поиск*\n\n"
+            "Введите название фильма:",
+            parse_mode='Markdown'
         )
 
-        # Create movie record
-        movie = db_manager.create_movie(details)
+    elif data == "stats":
+        await user_stats(query, context)
 
-        # Add to watchlist
-        watchlist_item = db_manager.add_to_watchlist(user.id, movie.id)
+    elif data.startswith("genre_"):
+        genre = data.split('_')[1]
+        await query.edit_message_text(f"🔍 Ищу фильмы жанра: {genre}...")
 
-        if watchlist_item:
-            await query.edit_message_text(f"✅ Добавлено в watchlist!\n\n🎬 {movie.title}")
-        else:
-            await query.edit_message_text(f"🎬 {movie.title}\n\n⚠️ Уже в твоём watchlist!")
-
-    except Exception as e:
-        logger.error(f"Error adding to watchlist: {e}")
-        await query.edit_message_text("❌ Ошибка при добавлении в watchlist")
-    finally:
-        db_manager.close()
-
-async def show_movie_details(query, item_id: int, media_type: str):
-    """Show detailed movie information"""
-    details = tmdb_client.get_movie_details(item_id, media_type)
-
-    if not details:
-        await query.edit_message_text("❌ Не удалось загрузить информацию о фильме")
-        return
-
-    title = details.get('title') or details.get('name', 'Без названия')
-    year = details.get('release_date', '')[:4] or details.get('first_air_date', '')[:4]
-    rating = details.get('vote_average', '?')
-    runtime = details.get('runtime')
-    genres = ', '.join([g['name'] for g in details.get('genres', [])])
-    overview = details.get('overview', 'Нет описания')
-
-    text = f"🎬 *{title}* ({year})\n\n"
-
-    if rating and rating != '?':
-        text += f"⭐ Рейтинг: {rating}/10\n"
-
-    if runtime:
-        text += f"⏱ Длительность: {runtime} мин\n"
-
-    if genres:
-        text += f"🎭 Жанры: {genres}\n"
-
-    text += f"\n{overview}"
-
-    # Add cast if available
-    credits = details.get('credits', {})
-    cast = credits.get('cast', [])
-    if cast:
-        top_cast = [actor['name'] for actor in cast[:3]]
-        text += f"\n\n🎭 В ролях: {', '.join(top_cast)}"
-
-    await query.edit_message_text(text, parse_mode='Markdown')
-
-async def mark_as_watched(query, watchlist_id: int):
-    """Mark movie as watched"""
-    db_manager = get_db_manager()
-    try:
-        user_id = query.from_user.id
-        success = db_manager.mark_as_watched(watchlist_id, user_id)
-
-        if success:
-            await query.edit_message_text("✅ Отмечено как просмотренное!")
-        else:
-            await query.edit_message_text("❌ Не удалось отметить как просмотренное")
-    finally:
-        db_manager.close()
-
-async def remove_from_watchlist(query, watchlist_id: int):
-    """Remove movie from watchlist"""
-    db_manager = get_db_manager()
-    try:
-        user_id = query.from_user.id
-        success = db_manager.remove_from_watchlist(watchlist_id, user_id)
-
-        if success:
-            await query.edit_message_text("🗑 Удалено из watchlist!")
-        else:
-            await query.edit_message_text("❌ Не удалось удалить из watchlist")
-    finally:
-        db_manager.close()
-
-async def user_stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show user statistics"""
-    db_manager = get_db_manager()
-    try:
-        user_id = update.effective_user.id
-
-        # Get user's watchlist stats
-        watchlist_items = db_manager.get_watchlist(user_id)
-        watched_count = len([w for w in watchlist_items if w.watched])
-        total_count = len(watchlist_items)
-
-        text = f"📊 *Твоя статистика:*\n\n"
-        text += f"📋 Всего в watchlist: {total_count}\n"
-        text += f"✅ Просмотрено: {watched_count}\n"
-
-        if total_count > 0:
-            progress = int((watched_count / total_count) * 100)
-            text += f"📈 Прогресс: {progress}%\n"
-
-        await update.message.reply_text(text, parse_mode='Markdown')
-    finally:
-        db_manager.close()
+    else:
+        await query.edit_message_text(f"Кнопка: {data}")

@@ -1,154 +1,156 @@
+# bot/db_utils.py
+
+import logging
 from datetime import datetime
 from sqlalchemy.orm import Session
 from bot.database import User, Movie, Watchlist, get_session
-from typing import Optional, List, Dict
-import logging
+from typing import Optional, List
 
 logger = logging.getLogger(__name__)
 
 class DatabaseManager:
-    """Manager for database operations"""
+    """Менеджер для работы с базой данных"""
 
     def __init__(self, session: Session = None):
         self.session = session or get_session()
 
-    # User operations
     def get_or_create_user(self, telegram_id: int, username: str = None,
                            first_name: str = None, last_name: str = None) -> User:
-        """Get or create user"""
-        user = self.session.query(User).filter_by(telegram_id=telegram_id).first()
+        """Получить или создать пользователя"""
+        try:
+            user = self.session.query(User).filter_by(telegram_id=telegram_id).first()
 
-        if not user:
-            user = User(
-                telegram_id=telegram_id,
-                username=username,
-                first_name=first_name,
-                last_name=last_name
-            )
-            self.session.add(user)
-            self.session.commit()
-            logger.info(f"New user created: {telegram_id}")
+            if not user:
+                user = User(
+                    telegram_id=telegram_id,
+                    username=username,
+                    first_name=first_name,
+                    last_name=last_name
+                )
+                self.session.add(user)
+                self.session.commit()
+                logger.info(f"Создан новый пользователь: {telegram_id}")
 
-        return user
-
-    # Movie operations
-    def get_movie_by_tmdb_id(self, tmdb_id: int, media_type: str) -> Optional[Movie]:
-        """Get movie by TMDB ID"""
-        return self.session.query(Movie).filter_by(
-            tmdb_id=tmdb_id,
-            media_type=media_type
-        ).first()
-
-    def create_movie(self, tmdb_data: dict) -> Movie:
-        """Create movie record from TMDB data"""
-        # Check if movie already exists
-        existing = self.get_movie_by_tmdb_id(
-            tmdb_data['id'],
-            tmdb_data.get('media_type', 'movie')
-        )
-
-        if existing:
-            return existing
-
-        # Create new movie record
-        movie = Movie(
-            tmdb_id=tmdb_data['id'],
-            title=tmdb_data.get('title') or tmdb_data.get('name', ''),
-            original_title=tmdb_data.get('original_title') or tmdb_data.get('original_name', ''),
-            release_date=tmdb_data.get('release_date') or tmdb_data.get('first_air_date', ''),
-            overview=tmdb_data.get('overview', ''),
-            poster_path=tmdb_data.get('poster_path', ''),
-            backdrop_path=tmdb_data.get('backdrop_path', ''),
-            media_type=tmdb_data.get('media_type', 'movie'),
-            genres=', '.join([g['name'] for g in tmdb_data.get('genres', [])]) if 'genres' in tmdb_data else '',
-            vote_average=tmdb_data.get('vote_average'),
-            vote_count=tmdb_data.get('vote_count'),
-            popularity=tmdb_data.get('popularity'),
-            runtime=tmdb_data.get('runtime'),
-            status=tmdb_data.get('status')
-        )
-
-        self.session.add(movie)
-        self.session.commit()
-        return movie
-
-    # Watchlist operations
-    def add_to_watchlist(self, user_id: int, movie_id: int) -> Optional[Watchlist]:
-        """Add movie to user's watchlist"""
-        # Check if already in watchlist
-        existing = self.session.query(Watchlist).filter_by(
-            user_id=user_id,
-            movie_id=movie_id
-        ).first()
-
-        if existing:
+            return user
+        except Exception as e:
+            logger.error(f"Ошибка при создании пользователя: {e}")
+            self.session.rollback()
             return None
 
-        watchlist_item = Watchlist(
-            user_id=user_id,
-            movie_id=movie_id,
-            reminder_enabled=True
-        )
+    def add_to_watchlist(self, user_id: int, movie_data: dict) -> Optional[Watchlist]:
+        """Добавить фильм в watchlist"""
+        try:
+            # Сначала создаем или находим фильм
+            movie = self.session.query(Movie).filter_by(
+                tmdb_id=movie_data.get('id')
+            ).first()
 
-        self.session.add(watchlist_item)
-        self.session.commit()
-        return watchlist_item
+            if not movie:
+                movie = Movie(
+                    tmdb_id=movie_data.get('id'),
+                    title=movie_data.get('title') or movie_data.get('name', ''),
+                    original_title=movie_data.get('original_title') or movie_data.get('original_name', ''),
+                    release_date=movie_data.get('release_date') or movie_data.get('first_air_date', ''),
+                    overview=movie_data.get('overview', ''),
+                    poster_url=movie_data.get('poster_path', ''),
+                    media_type=movie_data.get('media_type', 'movie'),
+                    genres=str(movie_data.get('genres', [])),
+                    vote_average=movie_data.get('vote_average', 0.0)
+                )
+                self.session.add(movie)
+                self.session.commit()
 
-    def get_watchlist(self, user_id: int, limit: int = 50) -> List[Watchlist]:
-        """Get user's watchlist"""
-        return self.session.query(Watchlist).join(Movie).filter(
-            Watchlist.user_id == user_id,
-            Watchlist.watched == False
-        ).order_by(Watchlist.added_at.desc()).limit(limit).all()
+            # Проверяем, не добавлен ли уже в watchlist
+            existing = self.session.query(Watchlist).filter_by(
+                user_id=user_id,
+                movie_id=movie.id
+            ).first()
+
+            if existing:
+                return existing
+
+            # Добавляем в watchlist
+            watchlist_item = Watchlist(
+                user_id=user_id,
+                movie_id=movie.id
+            )
+            self.session.add(watchlist_item)
+            self.session.commit()
+
+            return watchlist_item
+
+        except Exception as e:
+            logger.error(f"Ошибка при добавлении в watchlist: {e}")
+            self.session.rollback()
+            return None
+
+    def get_watchlist(self, user_id: int, limit: int = 20) -> List[dict]:
+        """Получить watchlist пользователя"""
+        try:
+            results = self.session.query(Watchlist, Movie) \
+                .join(Movie, Watchlist.movie_id == Movie.id) \
+                .filter(Watchlist.user_id == user_id) \
+                .filter(Watchlist.watched == False) \
+                .order_by(Watchlist.added_at.desc()) \
+                .limit(limit) \
+                .all()
+
+            watchlist = []
+            for watchlist_item, movie in results:
+                watchlist.append({
+                    'id': watchlist_item.id,
+                    'movie_id': movie.id,
+                    'title': movie.title,
+                    'year': movie.release_date[:4] if movie.release_date else '',
+                    'added_at': watchlist_item.added_at
+                })
+
+            return watchlist
+        except Exception as e:
+            logger.error(f"Ошибка при получении watchlist: {e}")
+            return []
 
     def mark_as_watched(self, watchlist_id: int, user_id: int) -> bool:
-        """Mark movie as watched"""
-        watchlist_item = self.session.query(Watchlist).filter_by(
-            id=watchlist_id,
-            user_id=user_id
-        ).first()
+        """Отметить фильм как просмотренный"""
+        try:
+            item = self.session.query(Watchlist).filter_by(
+                id=watchlist_id,
+                user_id=user_id
+            ).first()
 
-        if watchlist_item:
-            watchlist_item.watched = True
-            watchlist_item.watched_at = datetime.utcnow()
-            self.session.commit()
-            return True
-
-        return False
+            if item:
+                item.watched = True
+                self.session.commit()
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Ошибка при отметке как просмотренного: {e}")
+            self.session.rollback()
+            return False
 
     def remove_from_watchlist(self, watchlist_id: int, user_id: int) -> bool:
-        """Remove movie from watchlist"""
-        watchlist_item = self.session.query(Watchlist).filter_by(
-            id=watchlist_id,
-            user_id=user_id
-        ).first()
+        """Удалить из watchlist"""
+        try:
+            item = self.session.query(Watchlist).filter_by(
+                id=watchlist_id,
+                user_id=user_id
+            ).first()
 
-        if watchlist_item:
-            self.session.delete(watchlist_item)
-            self.session.commit()
-            return True
-
-        return False
+            if item:
+                self.session.delete(item)
+                self.session.commit()
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Ошибка при удалении из watchlist: {e}")
+            self.session.rollback()
+            return False
 
     def close(self):
-        """Close database session"""
+        """Закрыть сессию"""
         self.session.close()
 
-# Factory function
+# Фабрика для создания менеджера БД
 def get_db_manager() -> DatabaseManager:
+    """Получить экземпляр менеджера БД (функция, которую ищет handlers.py)"""
     return DatabaseManager()
-
-# Context manager decorator
-def with_db_session(func):
-    """Decorator for automatic database session management"""
-    def wrapper(*args, **kwargs):
-        db_manager = DatabaseManager()
-        try:
-            result = func(db_manager=db_manager, *args, **kwargs)
-            return result
-        except Exception as e:
-            logger.error(f"Database error: {e}")
-            raise
-        finally:
-            db_manager.close()
-    return wrapper
