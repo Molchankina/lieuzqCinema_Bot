@@ -73,7 +73,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     api_status = "✅ КиноПоиск активен" if api_client and api_client.is_active else "❌ КиноПоиск не настроен"
 
     welcome_text = f"""
-🎬 Привет, {user.first_name}! Я MovieMate — твой киногид!
+🎬 Привет, {user.first_name}! Я КиноПроводник — твой киногид!
 
 {api_status}
 
@@ -150,7 +150,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_genre_keyboard()
         )
 
-    elif text == "⭐ топ 10":
+    elif text == "⭐ топ 250":
         await show_top250(update, context)
 
     # Обработка кнопок
@@ -369,7 +369,7 @@ async def search_by_genre(update: Update, context: ContextTypes.DEFAULT_TYPE, ge
 
 async def show_top250(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Показать топ-250 фильмов"""
-    await update.message.reply_text("⭐ Загружаю топ-10 фильмов...")
+    await update.message.reply_text("⭐ Загружаю топ-250 фильмов...")
 
     try:
         result = api_client.get_top_films(page=1)
@@ -379,7 +379,7 @@ async def show_top250(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Не удалось загрузить топ фильмов.")
             return
 
-        text = "⭐ *Топ-10 лучших фильмов:*\n\n"
+        text = "⭐ *Топ-250 лучших фильмов:*\n\n"
         for i, film in enumerate(films, 1):
             title = film.get('nameRu') or 'Без названия'
             year = film.get('year', '')
