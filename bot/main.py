@@ -1,9 +1,10 @@
 import os
 import logging
+import handlers
+import database
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackQueryHandler
-from bot import handlers, database
 
 # Load environment variables
 load_dotenv()
