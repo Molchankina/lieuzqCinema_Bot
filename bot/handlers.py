@@ -150,7 +150,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_genre_keyboard()
         )
 
-    elif text == "⭐ топ 250":
+    elif text == "⭐ топ 10":
         await show_top250(update, context)
 
     # Обработка кнопок
