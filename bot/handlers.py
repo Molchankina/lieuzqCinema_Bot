@@ -603,8 +603,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def search_by_genre(update: Update, context: ContextTypes.DEFAULT_TYPE, genre: str):
-    """Поиск фильмов по жанру - 10 случайных фильмов с рейтингом ≥7.0"""
-    await update.message.reply_text(f"🎭 Ищу фильмы в жанре *{genre}* с рейтингом от 7.0...", parse_mode='Markdown')
+    """Поиск фильмов по жанру - 10 случайных фильмов"""
+    await update.message.reply_text(f"🎭 Ищу фильмы в жанре *{genre}*...", parse_mode='Markdown')
 
     if not api_client or not api_client.is_active:
         # Тестовые данные для жанра
@@ -624,39 +624,86 @@ async def search_by_genre(update: Update, context: ContextTypes.DEFAULT_TYPE, ge
             await update.message.reply_text(f"Жанр «{genre}» не найден в базе.")
             return
 
-        # Собираем фильмы с нескольких страниц
+        # Собираем фильмы с нескольких страниц без ограничения по рейтингу
         all_films = []
 
         for page in range(1, 6):  # Проверяем первые 5 страниц
-            result = api_client.get_films_by_filters(
-                genre_id=genre_id,
-                rating_from=70,  # Рейтинг от 7.0
-                page=page
-            )
+            try:
+                # Убрал rating_from=70 - теперь ищем все фильмы жанра
+                result = api_client.get_films_by_filters(
+                    genre_id=genre_id,
+                    page=page
+                )
 
-            films = result.get('items', [])
-            if not films:
-                break
+                films = result.get('items', [])
+                if not films:
+                    break
 
-            # Фильтруем фильмы с рейтингом ≥7.0
-            for film in films:
-                rating_str = film.get('ratingKinopoisk', '0')
+                # Добавляем все фильмы без фильтрации по рейтингу
+                all_films.extend(films)
+
+                # Если уже достаточно фильмов, выходим
+                if len(all_films) >= 50:  # Собираем до 50 фильмов для выбора
+                    break
+
+            except Exception as page_error:
+                logger.error(f"Ошибка на странице {page} для жанра {genre}: {page_error}")
+                continue
+
+        if not all_films:
+            # Если не нашли фильмы, пробуем альтернативный способ - поиск по названию жанра
+            logger.info(f"Пробую альтернативный поиск для жанра {genre}")
+
+            # Пробуем найти фильмы через поиск по ключевым словам
+            genre_keywords = {
+                "мелодрама": ["любовь", "романтика", "любовная история"],
+                "драма": ["драма", "трагедия", "эмоции"],
+                "комедия": ["комедия", "юмор", "смех"],
+                "боевик": ["боевик", "экшн", "сражения"],
+                "ужасы": ["ужасы", "хоррор", "страх"],
+                "фантастика": ["фантастика", "футуризм", "космос"],
+                "детектив": ["детектив", "расследование", "тайна"],
+                "триллер": ["триллер", "саспенс", "напряжение"],
+                "приключения": ["приключения", "путешествия", "экспедиция"]
+            }
+
+            keywords = genre_keywords.get(genre.lower(), [genre])
+
+            for keyword in keywords:
                 try:
-                    rating = float(rating_str) if rating_str else 0
-                    if rating >= 7.0:
-                        all_films.append(film)
-                except (ValueError, TypeError):
+                    search_result = api_client.search_films(keyword)
+                    search_films = search_result.get('films', [])
+
+                    if search_films:
+                        # Фильтруем фильмы, которые могут быть нужного жанра
+                        for film in search_films:
+                            film_genres = film.get('genres', [])
+                            if isinstance(film_genres, list):
+                                # Проверяем названия жанров
+                                genre_names = []
+                                for g in film_genres:
+                                    if isinstance(g, dict):
+                                        genre_names.append(g.get('genre', '').lower())
+                                    elif isinstance(g, str):
+                                        genre_names.append(g.lower())
+
+                                # Если жанр совпадает, добавляем
+                                if genre.lower() in genre_names:
+                                    all_films.append(film)
+
+                except Exception as search_error:
+                    logger.error(f"Ошибка поиска по ключевому слову {keyword}: {search_error}")
                     continue
 
         if not all_films:
             await update.message.reply_text(
-                f"😔 Не найдено фильмов в жанре «{genre}» с рейтингом от 7.0.\n"
+                f"😔 Не найдено фильмов в жанре «{genre}».\n"
                 "Попробуйте другой жанр.",
                 reply_markup=get_genre_keyboard()
             )
             return
 
-        # Выбираем 10 случайных фильмов
+        # Выбираем до 10 случайных фильмов
         if len(all_films) > 10:
             selected_films = random.sample(all_films, 10)
         else:
@@ -670,35 +717,52 @@ async def search_by_genre(update: Update, context: ContextTypes.DEFAULT_TYPE, ge
         )
 
         # Получаем полную информацию и показываем каждый фильм
+        films_shown = 0
         for film in selected_films:
-            film_id = extract_film_id(film)
-            if film_id:
-                try:
-                    # Получаем полную информацию о фильме
-                    details = api_client.get_film_details(film_id)
-                    if details:
-                        # Объединяем основную информацию с деталями
-                        film.update(details)
-                except Exception as e:
-                    logger.error(f"Ошибка получения деталей фильма {film_id}: {e}")
+            try:
+                film_id = extract_film_id(film)
+                if film_id:
+                    try:
+                        # Получаем полную информацию о фильме
+                        details = api_client.get_film_details(film_id)
+                        if details:
+                            # Объединяем основную информацию с деталями
+                            film.update(details)
+                    except Exception as e:
+                        logger.error(f"Ошибка получения деталей фильма {film_id}: {e}")
 
-            await send_film_card(update, film)
+                await send_film_card(update, film)
+                films_shown += 1
 
-            # Небольшая пауза между отправками, чтобы не перегружать API
-            import asyncio
-            await asyncio.sleep(0.5)
+                # Небольшая пауза между отправками, чтобы не перегружать API
+                import asyncio
+                await asyncio.sleep(0.5)
+
+            except Exception as film_error:
+                logger.error(f"Ошибка показа фильма: {film_error}")
+                continue
+
+        if films_shown == 0:
+            await update.message.reply_text(
+                f"😔 Не удалось показать фильмы в жанре «{genre}».\n"
+                "Попробуйте другой жанр.",
+                reply_markup=get_genre_keyboard()
+            )
 
     except Exception as e:
-        logger.error(f"Ошибка поиска по жанру: {e}")
+        logger.error(f"Ошибка поиска по жанру: {e}", exc_info=True)
         await update.message.reply_text(
             f"🎭 *Фильмы в жанре {genre}:*\n\n"
             "⚠️ Ошибка API, показаны примеры",
             parse_mode='Markdown',
             reply_markup=get_main_keyboard()
         )
+        # Показываем тестовые данные
         for film in POPULAR_MOVIES[:3]:
-            await send_film_card(update, film)
-
+            try:
+                await send_film_card(update, film)
+            except:
+                pass
 # ==================== ОБРАБОТЧИК INLINE-КНОПОК ====================
 
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
