@@ -22,12 +22,12 @@ class User(Base):
     first_name = Column(String(100))
     last_name = Column(String(100))
     language_code = Column(String(10), default='ru')
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now)  # Исправлено
 
 class Movie(Base):
     __tablename__ = 'movies'
     id = Column(Integer, primary_key=True)
-    tmdb_id = Column(Integer, index=True)
+    kp_id = Column(Integer, index=True)  # Переименовано из tmdb_id
     title = Column(String(500))
     original_title = Column(String(500))
     release_date = Column(String(20))
@@ -36,14 +36,14 @@ class Movie(Base):
     media_type = Column(String(20))  # 'movie' или 'tv'
     genres = Column(Text)
     vote_average = Column(Float)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.now)  # Исправлено
 
 class Watchlist(Base):
     __tablename__ = 'watchlist'
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, index=True)
     movie_id = Column(Integer)
-    added_at = Column(DateTime, default=datetime.utcnow)
+    added_at = Column(DateTime, default=datetime.now)  # Исправлено
     watched = Column(Boolean, default=False)
 
 def init_db():
@@ -76,8 +76,8 @@ def init_db():
         raise
 
 def get_session():
-    """Получить сессию базы данных (функция, которую ищет db_utils)"""
+    """Получить сессию базы данных"""
     global SessionLocal
     if SessionLocal is None:
         init_db()
-    return SessionLocal()
+    return scoped_session(SessionLocal)  # Исправлено: возвращаем scoped_session

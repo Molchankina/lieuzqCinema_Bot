@@ -501,47 +501,51 @@ async def show_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработка текстовых сообщений и кнопок быстрого действия"""
     text = update.message.text
-
-    # Сохраняем оригинальный текст для логирования
     original_text = text
-
-    # Приводим к нижнему регистру для сравнения
     text_lower = text.lower()
 
     logger.info(f"Получено сообщение: '{original_text}'")
 
     # Обработка кнопок
-    button_actions = {
-        "🔍 поиск фильма": lambda: update.message.reply_text(
+    if text_lower == "🔍 поиск фильма":
+        await update.message.reply_text(
             "Введите название фильма или сериала:\nНапример: *Матрица* или *Игра престолов*",
             parse_mode='Markdown'
-        ).then(lambda: context.user_data.update({'waiting_for': 'search'})),
-
-        "🎭 по жанру": lambda: update.message.reply_text(
-            "Выберите жанр:",
-            reply_markup=get_genre_keyboard()
-        ),
-
-        "⭐ топ 250": lambda: show_top250(update, context),
-
-        "🎲 случайный": lambda: random_real_movie(update, context),
-
-        "📋 мой watchlist": lambda: show_watchlist(update, context),
-
-        "ℹ️ помощь": lambda: help_command(update, context),
-
-        "🔙 на главную": lambda: update.message.reply_text(
-            "Возвращаю на главную...",
-            reply_markup=get_main_keyboard()
-        ),
-    }
-
-    # Проверяем точное совпадение с кнопками (в нижнем регистре)
-    if text_lower in button_actions:
-        await button_actions[text_lower]()
+        )
+        context.user_data['waiting_for'] = 'search'  # Исправлено
         return
 
-    # Обработка жанров (точное совпадение с учетом регистра)
+    elif text_lower == "🎭 по жанру":
+        await update.message.reply_text(
+            "Выберите жанр:",
+            reply_markup=get_genre_keyboard()
+        )
+        return
+
+    elif text_lower == "⭐ топ 250":
+        await show_top250(update, context)
+        return
+
+    elif text_lower == "🎲 случайный":
+        await random_real_movie(update, context)
+        return
+
+    elif text_lower == "📋 мой watchlist":
+        await show_watchlist(update, context)
+        return
+
+    elif text_lower == "ℹ️ помощь":
+        await help_command(update, context)
+        return
+
+    elif text == "🔙 На главную":
+        await update.message.reply_text(
+            "Возвращаю на главную...",
+            reply_markup=get_main_keyboard()
+        )
+        return
+
+    # Обработка жанров
     genre_buttons = {
         "🎭 Драма": "драма",
         "😂 Комедия": "комедия",
@@ -560,7 +564,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Обработка ввода после нажатия кнопки поиска
-    if 'waiting_for' in context.user_data and context.user_data['waiting_for'] == 'search':
+    if context.user_data.get('waiting_for') == 'search':
         await execute_search(update, text)
         context.user_data.pop('waiting_for', None)
         return
@@ -574,7 +578,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # Прямые текстовые запросы (исключая команды)
+    # Прямые текстовые запросы
     if text and len(text.strip()) > 2 and not text.strip().startswith('/'):
         await execute_search(update, text)
         return
