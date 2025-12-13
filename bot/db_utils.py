@@ -14,7 +14,7 @@ class DatabaseManager:
         logger.info("✅ Инициализирован упрощенный менеджер БД")
 
     def add_to_watchlist(self, user_id: int, movie_data: dict) -> bool:
-        """Добавить фильм в Watchlist (упрощенная версия)"""
+        """Добавить фильм в Watchlist"""
         try:
             # Проверяем, нет ли уже такого фильма у пользователя
             for item in self.watchlist:
@@ -28,6 +28,7 @@ class DatabaseManager:
                 'movie_id': movie_data.get('id'),
                 'title': movie_data.get('title', 'Без названия'),
                 'year': movie_data.get('year', ''),
+                'poster_url': movie_data.get('poster_url', ''),
                 'added_at': datetime.now()
             }
 
@@ -43,6 +44,8 @@ class DatabaseManager:
         """Получить Watchlist пользователя"""
         try:
             user_watchlist = [item for item in self.watchlist if item.get('user_id') == user_id]
+            # Сортируем по дате добавления (новые сверху)
+            user_watchlist.sort(key=lambda x: x.get('added_at', datetime.min), reverse=True)
             return user_watchlist[:20]  # Ограничиваем 20 фильмами
         except Exception as e:
             logger.error(f"Ошибка получения Watchlist: {e}")
@@ -53,9 +56,13 @@ class DatabaseManager:
         try:
             initial_length = len(self.watchlist)
             self.watchlist = [item for item in self.watchlist
-                              if not (item.get('user_id') == user_id and item.get('movie_id') == movie_id)]
+                              if not (item.get('user_id') == user_id and item.get('movie_id') == int(movie_id))]
 
-            return len(self.watchlist) < initial_length
+            removed = len(self.watchlist) < initial_length
+            if removed:
+                logger.info(f"Удален фильм из Watchlist: user_id={user_id}, movie_id={movie_id}")
+
+            return removed
         except Exception as e:
             logger.error(f"Ошибка удаления из Watchlist: {e}")
             return False

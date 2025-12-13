@@ -3,6 +3,7 @@
 import os
 import logging
 import requests
+import random
 from typing import List, Dict, Optional
 import time
 
@@ -129,6 +130,7 @@ class KinopoiskClient:
                              year_from: Optional[int] = None,
                              year_to: Optional[int] = None,
                              rating_from: Optional[int] = None,
+                             rating_to: Optional[int] = None,
                              page: int = 1) -> Dict:
         """Фильмы по фильтрам"""
         if not self.is_active:
@@ -137,9 +139,9 @@ class KinopoiskClient:
         url = f"{self.base_url}/v2.2/films"
         params = {
             "order": "RATING",
-            "type": "ALL",
+            "type": "FILM",  # Только фильмы, не сериалы
             "ratingFrom": rating_from or 0,
-            "ratingTo": 10,
+            "ratingTo": rating_to or 10,
             "yearFrom": year_from or 1900,
             "yearTo": year_to or 2025,
             "page": page
@@ -156,6 +158,86 @@ class KinopoiskClient:
         except Exception as e:
             logger.error(f"Ошибка фильтрации: {e}")
             return {"items": []}
+
+    def get_random_high_rated_movie(self, min_rating: float = 8.5) -> Optional[Dict]:
+        """Получить случайный фильм с высоким рейтингом"""
+        if not self.is_active:
+            return None
+
+        try:
+            # Сначала пробуем получить фильмы с рейтингом выше min_rating
+            # Note: API принимает ratingFrom в процентах (85 = 8.5)
+            rating_from_percent = int(min_rating * 10)
+
+            # Берем несколько страниц для выбора
+            all_films = []
+            for page in range(1, 6):  # Проверяем первые 5 страниц
+                result = self.get_films_by_filters(
+                    rating_from=rating_from_percent,
+                    rating_to=100,
+                    page=page
+                )
+
+                items = result.get('items', [])
+                if items:
+                    all_films.extend(items)
+
+                if len(all_films) >= 50:  # Не больше 50 фильмов
+                    break
+
+            if all_films:
+                # Фильтруем, чтобы точно был рейтинг выше min_rating
+                high_rated = []
+                for film in all_films:
+                    rating_str = film.get('ratingKinopoisk', '0')
+                    try:
+                        rating = float(rating_str) if rating_str else 0
+                        if rating >= min_rating:
+                            high_rated.append(film)
+                    except (ValueError, TypeError):
+                        continue
+
+                if high_rated:
+                    return random.choice(high_rated)
+
+            # Если не нашли по фильтрам, берем из топа
+            return self.get_random_from_top(min_rating)
+
+        except Exception as e:
+            logger.error(f"Ошибка получения случайного фильма: {e}")
+            return None
+
+    def get_random_from_top(self, min_rating: float = 8.5) -> Optional[Dict]:
+        """Получить случайный фильм из топа"""
+        try:
+            # Выбираем случайную страницу из топа
+            page = random.randint(1, 13)  # В топе 250 фильмов, по 20 на странице
+            result = self.get_top_films(page=page)
+
+            films = result.get('films', [])
+            if films:
+                # Фильтруем по рейтингу
+                high_rated = []
+                for film in films:
+                    rating_str = film.get('rating', '0')
+                    try:
+                        rating = float(rating_str) if rating_str else 0
+                        if rating >= min_rating:
+                            high_rated.append(film)
+                    except (ValueError, TypeError):
+                        continue
+
+                if high_rated:
+                    return random.choice(high_rated)
+                elif films:
+                    # Если нет фильмов с нужным рейтингом, берем любой из топа
+                    return random.choice(films)
+
+            return None
+
+        except Exception as e:
+            logger.error(f"Ошибка получения случайного из топа: {e}")
+            return None
 
 # Глобальный экземпляр
 kinopoisk_client = KinopoiskClient()
