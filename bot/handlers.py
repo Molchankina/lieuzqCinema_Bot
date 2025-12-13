@@ -1,4 +1,4 @@
-# bot/handlers.py - ПОЛНЫЙ ИСПРАВЛЕННЫЙ КОД
+# bot/handlers.py - ИСПРАВЛЕННАЯ ВЕРСИЯ
 
 import logging
 import random
@@ -48,6 +48,7 @@ GENRE_MAP = {
 POPULAR_MOVIES = [
     {
         "id": 301,
+        "filmId": 301,
         "title": "Матрица",
         "year": "1999",
         "rating": "8.7",
@@ -58,6 +59,7 @@ POPULAR_MOVIES = [
     },
     {
         "id": 258687,
+        "filmId": 258687,
         "title": "Интерстеллар",
         "year": "2014",
         "rating": "8.6",
@@ -68,6 +70,7 @@ POPULAR_MOVIES = [
     },
     {
         "id": 435,
+        "filmId": 435,
         "title": "Зеленая миля",
         "year": "1999",
         "rating": "9.1",
@@ -78,6 +81,7 @@ POPULAR_MOVIES = [
     },
     {
         "id": 448,
+        "filmId": 448,
         "title": "Форрест Гамп",
         "year": "1994",
         "rating": "8.8",
@@ -107,139 +111,40 @@ def get_genre_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# ==================== ОСНОВНЫЕ ОБРАБОТЧИКИ КОМАНД ====================
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start"""
-    user = update.effective_user
+def extract_film_id(film_data: dict) -> int:
+    """Извлечь ID фильма из данных (обрабатывает разные форматы)"""
+    # Пробуем разные возможные ключи для ID
+    film_id = film_data.get('filmId') or film_data.get('kinopoiskId') or film_data.get('id')
 
-    welcome_text = f"""
-🎬 Привет, {user.first_name}! Я КиноПроводник — твой киногид!
+    # Если это строка, пытаемся преобразовать в число
+    if isinstance(film_id, str):
+        try:
+            return int(film_id)
+        except (ValueError, TypeError):
+            # Пробуем извлечь из других полей
+            pass
 
-✨ *Что я умею:*
-• 🔍 Искать фильмы и сериалы
-• 🎯 Подбирать похожие фильмы  
-• 💾 Сохранять в «Посмотреть позже»
-• 🎲 Рекомендовать случайные фильмы
-• ⭐ Показывать топ-250 лучших фильмов
+    # Если все еще нет ID, используем заглушку
+    if not film_id:
+        film_id = film_data.get('nameRu', 'unknown').replace(' ', '_')
 
-💡 *Используй кнопки ниже для быстрого доступа!*
-"""
+    return film_id
 
-    await update.message.reply_text(
-        welcome_text,
-        parse_mode='Markdown',
-        reply_markup=get_main_keyboard()
-    )
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /help"""
-    help_text = """
-📚 *КиноПроводник Bot — помощник по фильмам*
-
-🎯 *Основные функции:*
-• Поиск фильмов и сериалов
-• Топ-250 лучших фильмов
-• Подбор по жанрам
-• Случайные рекомендации
-• Список «Посмотреть позже»
-
-⌨️ *Используй кнопки или команды:*
-• /start — запустить бота
-• /search <название> — поиск фильма
-• /top — топ-250 фильмов  
-• /random — случайный фильм
-• /watchlist — мой список
-• /help — эта справка
-
-🎬 *Примеры запросов:*
-• «Матрица»
-• «Детектив 90-х»
-• «Лучшие комедии 2000-х»
-"""
-    await update.message.reply_text(help_text, parse_mode='Markdown', reply_markup=get_main_keyboard())
-
-async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /search"""
-    query = ' '.join(context.args) if context.args else ''
-
-    if not query:
-        await update.message.reply_text(
-            "Введите название фильма или сериала:\n"
-            "Например: *Матрица* или *Игра престолов*",
-            parse_mode='Markdown'
-        )
-        return
-
-    await execute_search(update, query)
-
-async def execute_search(update, query: str):
-    """Выполнение поиска фильмов"""
-    if not api_client or not api_client.is_active:
-        await show_test_results(update, query)
-        return
-
-    try:
-        logger.info(f"🔍 Поиск в КиноПоиске: '{query}'")
-        result = api_client.search_films(query)
-
-        if not result or 'error' in result:
-            error_msg = result.get('error', 'Неизвестная ошибка')
-            await update.message.reply_text(f"❌ Ошибка API: {error_msg}")
-            return
-
-        films = result.get('films', [])
-        total_found = result.get('searchFilmsCountResult', 0)
-
-        logger.info(f"Найдено фильмов: {total_found}")
-
-        if not films or total_found == 0:
-            await update.message.reply_text(
-                f"😔 По запросу «{query}» ничего не найдено.\n\n"
-                "Попробуйте:\n"
-                "• Уточнить название\n"
-                "• Использовать русское название\n"
-                "• Проверить орфографию"
-            )
-            return
-
-        # Показываем первые 3 результата
-        shown_count = 0
-        for film in films[:3]:
-            if await send_film_card(update, film):
-                shown_count += 1
-
-        if shown_count == 0:
-            await update.message.reply_text("😔 Не удалось показать результаты. Попробуйте другой запрос.")
-
-        # Если есть больше результатов
-        if total_found > 3:
-            await update.message.reply_text(
-                f"📊 Найдено фильмов: {total_found}\n"
-                f"Показаны первые {min(3, len(films))} результата.",
-                reply_markup=get_main_keyboard()
-            )
-
-    except Exception as e:
-        logger.error(f"Ошибка поиска: {str(e)}", exc_info=True)
-        await update.message.reply_text(
-            "❌ Ошибка при поиске.\n"
-            "Попробуйте позже или другой запрос."
-        )
+def get_film_title(film_data: dict) -> str:
+    """Получить название фильма"""
+    return film_data.get('nameRu') or film_data.get('nameEn') or film_data.get('title') or 'Без названия'
 
 async def send_film_card(update, film, from_watchlist: bool = False) -> bool:
     """Отправляет карточку фильма с кнопками"""
     try:
-        title = film.get('nameRu') or film.get('nameEn') or film.get('title') or 'Без названия'
+        title = get_film_title(film)
         year = film.get('year', '') or film.get('release_date', '')[:4]
         rating = film.get('rating', '') or film.get('ratingKinopoisk', '')
-        film_id = film.get('filmId') or film.get('id')
+        film_id = extract_film_id(film)
         description = film.get('description', '') or film.get('overview', '')
-        poster_url = film.get('posterUrlPreview') or film.get('poster_url')
-
-        if not film_id:
-            logger.error(f"Нет filmId для фильма: {title}")
-            return False
+        poster_url = film.get('posterUrlPreview') or film.get('poster_url') or film.get('posterUrl')
 
         # Формируем текст
         text = f"*{title}*"
@@ -300,6 +205,126 @@ async def send_film_card(update, film, from_watchlist: bool = False) -> bool:
         logger.error(f"Ошибка формирования карточки: {e}")
         return False
 
+async def execute_search(update, query: str):
+    """Выполнение поиска фильмов"""
+    if not api_client or not api_client.is_active:
+        await show_test_results(update, query)
+        return
+
+    try:
+        logger.info(f"🔍 Поиск в КиноПоиске: '{query}'")
+        result = api_client.search_films(query)
+
+        if not result or 'error' in result:
+            error_msg = result.get('error', 'Неизвестная ошибка')
+            await update.message.reply_text(f"❌ Ошибка API: {error_msg}")
+            return
+
+        films = result.get('films', [])
+        total_found = result.get('searchFilmsCountResult', 0)
+
+        logger.info(f"Найдено фильмов: {total_found}")
+
+        if not films or total_found == 0:
+            await update.message.reply_text(
+                f"😔 По запросу «{query}» ничего не найдено.\n\n"
+                "Попробуйте:\n"
+                "• Уточнить название\n"
+                "• Использовать русское название\n"
+                "• Проверить орфографию"
+            )
+            return
+
+        # Показываем первые 3 результата
+        shown_count = 0
+        for film in films[:3]:
+            if await send_film_card(update, film):
+                shown_count += 1
+
+        if shown_count == 0:
+            await update.message.reply_text("😔 Не удалось показать результаты. Попробуйте другой запрос.")
+
+        # Если есть больше результатов
+        if total_found > 3:
+            await update.message.reply_text(
+                f"📊 Найдено фильмов: {total_found}\n"
+                f"Показаны первые {min(3, len(films))} результата.",
+                reply_markup=get_main_keyboard()
+            )
+
+    except Exception as e:
+        logger.error(f"Ошибка поиска: {str(e)}", exc_info=True)
+        await update.message.reply_text(
+            "❌ Ошибка при поиске.\n"
+            "Попробуйте позже или другой запрос."
+        )
+
+# ==================== ОСНОВНЫЕ ОБРАБОТЧИКИ КОМАНД ====================
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /start"""
+    user = update.effective_user
+
+    welcome_text = f"""
+🎬 Привет, {user.first_name}! Я MovieMate — твой киногид!
+
+✨ *Что я умею:*
+• 🔍 Искать фильмы и сериалы
+• 🎯 Подбирать похожие фильмы  
+• 💾 Сохранять в «Посмотреть позже»
+• 🎲 Рекомендовать случайные фильмы
+• ⭐ Показывать топ-250 лучших фильмов
+
+💡 *Используй кнопки ниже для быстрого доступа!*
+"""
+
+    await update.message.reply_text(
+        welcome_text,
+        parse_mode='Markdown',
+        reply_markup=get_main_keyboard()
+    )
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команда /help"""
+    help_text = """
+📚 *MovieMate Bot — помощник по фильмам*
+
+🎯 *Основные функции:*
+• Поиск фильмов и сериалов
+• Топ-250 лучших фильмов
+• Подбор по жанрам
+• Случайные рекомендации
+• Список «Посмотреть позже»
+
+⌨️ *Используй кнопки или команды:*
+• /start — запустить бота
+• /search <название> — поиск фильма
+• /top — топ-250 фильмов  
+• /random — случайный фильм
+• /watchlist — мой список
+• /help — эта справка
+
+🎬 *Примеры запросов:*
+• «Матрица»
+• «Детектив 90-х»
+• «Лучшие комедии 2000-х»
+"""
+    await update.message.reply_text(help_text, parse_mode='Markdown', reply_markup=get_main_keyboard())
+
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /search"""
+    query = ' '.join(context.args) if context.args else ''
+
+    if not query:
+        await update.message.reply_text(
+            "Введите название фильма или сериала:\n"
+            "Например: *Матрица* или *Игра престолов*",
+            parse_mode='Markdown'
+        )
+        return
+
+    await execute_search(update, query)
+
 async def show_test_results(update, query):
     """Показать тестовые результаты (когда API не работает)"""
     logger.info(f"🔍 Тестовый поиск: '{query}'")
@@ -343,7 +368,7 @@ async def show_top250(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         text = "⭐ *Топ-10 лучших фильмов:*\n\n"
         for i, film in enumerate(films, 1):
-            title = film.get('nameRu') or 'Без названия'
+            title = get_film_title(film)
             year = film.get('year', '')
             rating = film.get('rating', '')
 
@@ -367,59 +392,6 @@ async def show_top250(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=get_main_keyboard()
         )
 
-async def get_random_movie_from_api() -> dict:
-    """Получить случайный фильм из КиноПоиска с рейтингом не ниже 8.5"""
-    if not api_client or not api_client.is_active:
-        return random.choice(POPULAR_MOVIES)
-
-    try:
-        # Ищем фильмы с рейтингом от 8.5
-        result = api_client.get_films_by_filters(rating_from=85)  # 85 = 8.5 в API
-
-        if result and 'items' in result and result['items']:
-            items = result['items']
-
-            # Фильтруем фильмы с рейтингом от 8.5
-            good_movies = []
-            for film in items:
-                rating_str = film.get('ratingKinopoisk', '0')
-                try:
-                    rating = float(rating_str) if rating_str else 0
-                    if rating >= 8.5:
-                        good_movies.append(film)
-                except (ValueError, TypeError):
-                    continue
-
-            if good_movies:
-                return random.choice(good_movies)
-
-        # Если не нашли по фильтрам, берем из топа
-        result = api_client.get_top_films(page=random.randint(1, 10))
-        if result and 'films' in result and result['films']:
-            films = result['films']
-            good_films = []
-            for film in films:
-                rating_str = film.get('rating', '0')
-                try:
-                    rating = float(rating_str) if rating_str else 0
-                    if rating >= 8.5:
-                        good_films.append(film)
-                except (ValueError, TypeError):
-                    continue
-
-            if good_films:
-                return random.choice(good_films)
-
-        # Если ничего не нашлось, берем любой фильм из топа
-        if result and 'films' in result and result['films']:
-            return random.choice(result['films'])
-
-    except Exception as e:
-        logger.error(f"Ошибка получения случайного фильма: {e}")
-
-    # Возвращаем случайный из локального списка
-    return random.choice(POPULAR_MOVIES)
-
 async def random_real_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /random - случайный фильм из КиноПоиска"""
     await update.message.reply_text("🎲 Ищу случайный фильм с рейтингом от 8.5...")
@@ -428,36 +400,7 @@ async def random_real_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         movie = await get_random_movie_from_api()
 
         if movie:
-            title = movie.get('nameRu') or movie.get('nameOriginal') or movie.get('title') or 'Неизвестный фильм'
-            year = movie.get('year') or movie.get('release_date', '')[:4] or '?'
-            rating = movie.get('rating') or movie.get('ratingKinopoisk') or '?'
-
-            text = f"🎲 *Случайный фильм для тебя:*\n\n"
-            text += f"🎬 *{title}* ({year})\n"
-            text += f"⭐ Рейтинг: {rating}\n"
-
-            # Пробуем получить детали для более полной информации
-            film_id = movie.get('filmId') or movie.get('id')
-            if film_id and api_client:
-                details = api_client.get_film_details(film_id)
-                if details:
-                    genres = details.get('genres', [])
-                    if genres:
-                        genre_names = [g.get('genre', '') for g in genres[:3]]
-                        text += f"🎭 Жанр: {', '.join(genre_names)}\n"
-
-                    countries = details.get('countries', [])
-                    if countries:
-                        country_names = [c.get('country', '') for c in countries[:2]]
-                        text += f"🌍 Страна: {', '.join(country_names)}\n"
-
-                    description = details.get('description', '')
-                    if description:
-                        text += f"\n📝 {description[:200]}..."
-
-            # Создаем карточку фильма
             await send_film_card(update, movie)
-
         else:
             await update.message.reply_text(
                 "Не удалось найти случайный фильм. Попробуйте еще раз.",
@@ -469,6 +412,24 @@ async def random_real_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Показываем локальный фильм как запасной вариант
         movie = random.choice(POPULAR_MOVIES)
         await send_film_card(update, movie)
+
+async def get_random_movie_from_api() -> dict:
+    """Получить случайный фильм из КиноПоиска с рейтингом не ниже 8.5"""
+    if not api_client or not api_client.is_active:
+        return random.choice(POPULAR_MOVIES)
+
+    try:
+        # Используем метод из kinopoisk_client
+        movie = api_client.get_random_high_rated_movie(min_rating=8.5)
+        if movie:
+            return movie
+
+        # Если не нашли, используем локальный список
+        return random.choice(POPULAR_MOVIES)
+
+    except Exception as e:
+        logger.error(f"Ошибка получения случайного фильма: {e}")
+        return random.choice(POPULAR_MOVIES)
 
 async def show_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Обработчик команды /watchlist - показывает Watchlist"""
@@ -524,6 +485,7 @@ async def show_watchlist(update: Update, context: ContextTypes.DEFAULT_TYPE):
         for item in watchlist[:3]:  # Показываем первые 3
             film_data = {
                 'id': item['movie_id'],
+                'filmId': item['movie_id'],
                 'title': item['title'],
                 'year': item.get('year', ''),
                 'poster_url': item.get('poster_url', '')
@@ -671,7 +633,7 @@ async def search_by_genre(update: Update, context: ContextTypes.DEFAULT_TYPE, ge
 
         text = f"🎭 *Лучшие фильмы в жанре {genre}:*\n\n"
         for i, film in enumerate(films, 1):
-            title = film.get('nameRu') or 'Без названия'
+            title = get_film_title(film)
             year = film.get('year', '')
             rating = film.get('ratingKinopoisk', '')
 
@@ -736,14 +698,18 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             # Получаем информацию о фильме
             film_info = {}
             if api_client:
-                film_info = api_client.get_film_details(int(film_id))
+                try:
+                    film_info = api_client.get_film_details(int(film_id))
+                except:
+                    # Если не удалось получить детали, создаем базовую информацию
+                    film_info = {'nameRu': f'Фильм ID {film_id}'}
 
             # Создаем данные фильма
             movie_data = {
                 'id': int(film_id),
-                'title': film_info.get('nameRu') or 'Неизвестный фильм',
+                'title': film_info.get('nameRu') or f'Фильм ID {film_id}',
                 'year': film_info.get('year', ''),
-                'poster_url': film_info.get('posterUrl', '')
+                'poster_url': film_info.get('posterUrl') or film_info.get('posterUrlPreview', '')
             }
 
             # Добавляем в watchlist
@@ -772,12 +738,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif data == "random_another":
         # Еще случайный фильм
-        await random_real_movie(update, context)
+        from telegram import Update as TUpdate
+        mock_update = TUpdate(update.update_id, query.message)
+        await random_real_movie(mock_update, context)
 
     elif data.startswith("search_"):
         # Поиск похожих по названию
         film_title = data.split('_', 1)[1]
-        await execute_search(update, film_title)
+        from telegram import Update as TUpdate
+        mock_update = TUpdate(update.update_id, query.message)
+        await execute_search(mock_update, film_title)
 
     else:
         # Неизвестная кнопка
@@ -795,8 +765,19 @@ async def show_film_info(query, film_id: str):
             )
             return
 
-        film = api_client.get_film_details(int(film_id))
-        if not film:
+        try:
+            film = api_client.get_film_details(int(film_id))
+        except ValueError:
+            # Если film_id не число (например, строка из заглушки)
+            await query.edit_message_text(
+                f"🎬 *Информация о фильме*\n\n"
+                "К сожалению, для этого фильма не удалось получить подробную информацию.\n"
+                "Попробуйте найти фильм через поиск.",
+                parse_mode='Markdown'
+            )
+            return
+
+        if not film or 'error' in film:
             await query.edit_message_text("❌ Не удалось загрузить информацию о фильме.")
             return
 
@@ -828,15 +809,35 @@ async def show_film_info(query, film_id: str):
         if film_length:
             text += f"⏱️ Длительность: {film_length} мин.\n"
 
-        # Бюджет и сборы
-        budget = film.get('budget')
-        if budget:
-            text += f"💰 Бюджет: ${budget:,}\n"
+        # Слоган
+        slogan = film.get('slogan')
+        if slogan:
+            text += f"💬 *{slogan}*\n"
 
         if description:
             text += f"\n📝 {description}"
 
-        await query.edit_message_text(text, parse_mode='Markdown')
+        # Кнопка "Назад" или другие действия
+        keyboard = [[
+            InlineKeyboardButton("🎯 Похожие фильмы", callback_data=f"similar_{film_id}"),
+            InlineKeyboardButton("💾 В Watchlist", callback_data=f"watch_{film_id}")
+        ]]
+
+        try:
+            await query.edit_message_text(
+                text,
+                parse_mode='Markdown',
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        except Exception as e:
+            # Если сообщение слишком длинное, разбиваем
+            if len(text) > 4000:
+                text1 = text[:2000]
+                text2 = text[2000:]
+                await query.edit_message_text(text1, parse_mode='Markdown')
+                await query.message.reply_text(text2, parse_mode='Markdown', reply_markup=InlineKeyboardMarkup(keyboard))
+            else:
+                raise e
 
     except Exception as e:
         logger.error(f"Ошибка получения информации о фильме: {e}")
@@ -856,7 +857,12 @@ async def show_similar_films(query, film_id: str):
             )
             return
 
-        similar = api_client.get_similar_films(int(film_id))
+        try:
+            similar = api_client.get_similar_films(int(film_id))
+        except ValueError:
+            await query.edit_message_text("😔 Не нашёл похожих фильмов.")
+            return
+
         if not similar:
             await query.edit_message_text("😔 Не нашёл похожих фильмов.")
             return
@@ -871,7 +877,20 @@ async def show_similar_films(query, film_id: str):
                 text += f" ⭐ {rating}"
             text += "\n"
 
-        await query.edit_message_text(text, parse_mode='Markdown')
+        # Кнопки для перехода к похожим фильмам
+        keyboard = []
+        for film in similar[:3]:
+            similar_film_id = extract_film_id(film)
+            title = get_film_title(film)[:20]
+            keyboard.append([
+                InlineKeyboardButton(f"🔍 {title}", callback_data=f"info_{similar_film_id}")
+            ])
+
+        await query.edit_message_text(
+            text,
+            parse_mode='Markdown',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
 
     except Exception as e:
         logger.error(f"Ошибка получения похожих фильмов: {e}")
